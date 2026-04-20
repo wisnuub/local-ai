@@ -27,17 +27,17 @@ jobs:
       - name: Build renderer
         run: npm run build
 
-      - name: Package app (arm64)
+      - name: Package arm64
         run: npx electron-builder --mac dir --arm64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Package app (x64)
+      - name: Package x64
         run: npx electron-builder --mac dir --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Sign apps (ad-hoc + entitlements)
+      - name: Write entitlements
         run: |
           cat > local-ai.entitlements <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -49,43 +49,41 @@ jobs:
           </dict></plist>
           EOF
 
-          for app in dist/mac-arm64/*.app dist/mac/*.app; do
-            [ -e "$app" ] || continue
-            codesign \
-              --entitlements local-ai.entitlements \
-              --force \
-              --deep \
-              --sign - \
-              "$app"
-            echo "Signed: $app"
-          done
-
-      - name: Create DMGs
+      - name: Sign + DMG arm64
         run: |
-          for arch in arm64 x64; do
-            if [ "$arch" = "arm64" ]; then
-              appdir="dist/mac-arm64"
-            else
-              appdir="dist/mac"
-            fi
+          APP=$(find dist/mac-arm64 -maxdepth 1 -name "*.app" 2>/dev/null | head -1)
+          echo "App: $APP"
+          codesign --entitlements local-ai.entitlements --force --deep --sign - "$APP"
 
-            app=$(find "$appdir" -maxdepth 1 -name "*.app" | head -1)
-            [ -n "$app" ] || continue
+          STAGING=$(mktemp -d)
+          cp -r "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create \
+            -volname "local-ai" \
+            -srcfolder "$STAGING" \
+            -ov -format UDZO \
+            -imagekey zlib-level=9 \
+            "dist/local-ai-${{ github.ref_name }}-arm64.dmg"
+          rm -rf "$STAGING"
 
-            STAGING=$(mktemp -d)
-            cp -r "$app" "$STAGING/"
-            ln -s /Applications "$STAGING/Applications"
+      - name: Sign + DMG x64
+        run: |
+          # electron-builder names the x64 dir "mac-x64" when cross-compiling on arm64 runner
+          X64DIR=$(ls -d dist/mac-x64 dist/mac 2>/dev/null | head -1)
+          APP=$(find "$X64DIR" -maxdepth 1 -name "*.app" 2>/dev/null | head -1)
+          echo "App: $APP"
+          codesign --entitlements local-ai.entitlements --force --deep --sign - "$APP"
 
-            hdiutil create \
-              -volname "local-ai" \
-              -srcfolder "$STAGING" \
-              -ov -format UDZO \
-              -imagekey zlib-level=9 \
-              "dist/local-ai-${{ github.ref_name }}-${arch}.dmg"
-
-            rm -rf "$STAGING"
-            echo "Created DMG for $arch"
-          done
+          STAGING=$(mktemp -d)
+          cp -r "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create \
+            -volname "local-ai" \
+            -srcfolder "$STAGING" \
+            -ov -format UDZO \
+            -imagekey zlib-level=9 \
+            "dist/local-ai-${{ github.ref_name }}-x64.dmg"
+          rm -rf "$STAGING"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -119,7 +117,7 @@ jobs:
       - name: Build renderer
         run: npm run build
 
-      - name: Package (x64)
+      - name: Package x64
         run: npx electron-builder --win --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
@@ -147,8 +145,6 @@ jobs:
       contents: write
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           name: mac-dist
@@ -174,7 +170,7 @@ jobs:
             | Windows | `local-ai-*.exe` |
 
             ### First run
-            - **macOS** — right-click → Open if Gatekeeper prompts, then Open again to confirm
+            - **macOS** — right-click → Open, then Open again to confirm
             - **Windows** — click "More info → Run anyway" if SmartScreen appears
           files: |
             artifacts/mac/*.dmg
