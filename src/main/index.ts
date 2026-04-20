@@ -8,6 +8,10 @@ import https from 'https'
 import http from 'http'
 import type { IncomingMessage, ClientRequest } from 'http'
 import { runConnectors } from './connectors'
+import {
+  isBinReady, downloadBinary, scanLoras, scanImageModels,
+  generate, cancelGeneration, IMG_MODEL_DIR, LORA_DIR, IMG_OUT_DIR,
+} from './image-gen'
 
 const MODELS_DIR = join(app.getPath('userData'), 'models')
 if (!existsSync(MODELS_DIR)) mkdirSync(MODELS_DIR, { recursive: true })
@@ -205,6 +209,20 @@ ipcMain.handle('models:load', async (_e, filename: string) => {
   }
 })
 
+ipcMain.handle('chat:init', async (_e, systemPrompt: string) => {
+  try {
+    if (!currentContext) return { ok: false, error: 'No model loaded' }
+    const { LlamaChatSession } = await import('node-llama-cpp')
+    currentSession = new LlamaChatSession({
+      contextSequence: currentContext.getSequence(),
+      systemPrompt,
+    })
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+})
+
 ipcMain.on('chat:send', async (event, { message }: { message: string }) => {
   if (!currentSession) { event.reply('chat:error', 'No model loaded.'); return }
   try {
@@ -267,4 +285,79 @@ ipcMain.handle('connectors:search', async (_e, { connectors, query }: { connecto
 ipcMain.handle('dialog:open-folder', async () => {
   const res = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory'] })
   return res.filePaths[0] || null
+})
+
+// ─── Image generation ─────────────────────────────────────────────────────────
+
+ipcMain.handle('img:check-bin', () => isBinReady())
+ipcMain.handle('img:scan-models', () => scanImageModels())
+ipcMain.handle('img:scan-loras', () => scanLoras())
+ipcMain.handle('img:cancel', () => { cancelGeneration(); return true })
+
+ipcMain.handle('img:open-lora-dir', async () => {
+  const { mkdirSync, existsSync } = require('fs')
+  if (!existsSync(LORA_DIR)) mkdirSync(LORA_DIR, { recursive: true })
+  shell.openPath(LORA_DIR)
+  return true
+})
+
+ipcMain.on('img:download-bin', async (event) => {
+  try {
+    await downloadBinary(p => event.reply('img:bin-progress', { progress: p }))
+    event.reply('img:bin-done')
+  } catch (e: any) {
+    event.reply('img:bin-error', e.message)
+  }
+})
+
+ipcMain.on('img:download-model', async (event, { url, filename }: { url: string; filename: string }) => {
+  const dest = require('path').join(IMG_MODEL_DIR, filename)
+  if (require('fs').existsSync(dest)) { event.reply('img:model-done', { filename }); return }
+
+  const tmpPath = dest + '.tmp'
+  const { createWriteStream: cws, existsSync: ex, statSync: ss } = require('fs')
+  let received = ex(tmpPath) ? ss(tmpPath).size : 0
+  const file = cws(tmpPath, { flags: 'a' })
+  const total_ref = { val: 0 }
+
+  const startReq = (u: string, redirects = 5) => {
+    const mod = u.startsWith('https') ? https : http
+    const headers: Record<string, string> = { 'User-Agent': 'local-ai/1.0' }
+    if (received > 0) headers['Range'] = `bytes=${received}-`
+    mod.get(u, { headers }, (res: IncomingMessage) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        if (redirects > 0) startReq(res.headers.location, redirects - 1)
+        else event.reply('img:model-error', { filename, error: 'Too many redirects' })
+        return
+      }
+      const rangeTotal = res.headers['content-range'] ? Number(res.headers['content-range'].split('/')[1]) : 0
+      total_ref.val = rangeTotal || Number(res.headers['content-length'] || 0)
+      res.on('data', (chunk: Buffer) => {
+        received += chunk.length
+        file.write(chunk)
+        event.reply('img:model-progress', { filename, received, total: total_ref.val, progress: total_ref.val > 0 ? received / total_ref.val : 0 })
+      })
+      res.on('end', () => {
+        file.end(() => {
+          require('fs').renameSync(tmpPath, dest)
+          event.reply('img:model-done', { filename })
+        })
+      })
+      res.on('error', (e: Error) => event.reply('img:model-error', { filename, error: e.message }))
+    }).on('error', (e: Error) => event.reply('img:model-error', { filename, error: e.message }))
+  }
+  startReq(url)
+})
+
+ipcMain.on('img:generate', async (event, params: any) => {
+  const { join: pjoin } = require('path')
+  const { existsSync: ex, mkdirSync } = require('fs')
+  if (!ex(IMG_OUT_DIR)) mkdirSync(IMG_OUT_DIR, { recursive: true })
+  const outputFile = pjoin(IMG_OUT_DIR, `img_${Date.now()}.png`)
+  try {
+    const result = await generate({ ...params, outputFile }, (p) => event.reply('img:progress', p))
+    event.reply('img:done', { path: result })
+  } catch (e: any) {
+    event.reply('img:error', e.message)
+  }
 })

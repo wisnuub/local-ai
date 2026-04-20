@@ -17,8 +17,10 @@ const TOOL_ICONS: Record<ToolName, string> = {
 
 const DESTRUCTIVE: ToolName[] = ['write_file', 'patch_file', 'run_shell']
 
-// System prompt instructing model to emit tool calls in a parseable format
-const AGENT_SYSTEM = `You are a local AI coding agent (like VSCode with AI). You can use tools to read/write files, run shell commands, and help with any coding task.
+function makeSystemPrompt(workspace: string) {
+  return `You are a local AI coding agent (like VSCode with AI). You can use tools to read/write files, run shell commands, and help with any coding task.
+
+Current workspace: ${workspace}
 
 When you need to use a tool, output EXACTLY this format (nothing else on those lines):
 
@@ -27,14 +29,17 @@ ACTION: <tool_name>
 ARGS: {"key": "value"}
 
 Available tools:
-- read_file: {"path": "..."}
+- read_file: {"path": "absolute or relative path"}
 - write_file: {"path": "...", "content": "..."}
-- patch_file: {"path": "...", "old": "...", "new": "..."}
-- list_dir: {"path": "..."}
-- run_shell: {"command": "..."}
+- patch_file: {"path": "...", "old": "exact text to replace", "new": "replacement text"}
+- list_dir: {"path": "${workspace}"}
+- run_shell: {"command": "git status or any shell command"}
 
-After tool results you will see OBSERVATION: <result>. Continue reasoning until done, then output FINAL: <answer>.
+IMPORTANT: Always use tools to explore the workspace yourself — never ask the user to provide file contents or run commands for you. Start by listing the workspace directory if unsure what files exist.
+
+After tool results you will see OBSERVATION: <result>. Continue reasoning until you have enough info, then output FINAL: <answer>.
 For simple questions with no file operations, just reply directly (no THOUGHT/ACTION needed).`
+}
 
 let msgIdCounter = 0
 const uid = () => `msg-${++msgIdCounter}-${Math.random().toString(36).slice(2, 7)}`
@@ -71,6 +76,11 @@ export default function ChatView({ model, workspace }: Props) {
   const [busyConns,     setBusyConns]     = useState<Set<string>>(new Set())
   const bottomRef  = useRef<HTMLDivElement>(null)
   const inputRef   = useRef<HTMLTextAreaElement>(null)
+
+  // Reinitialize session with system prompt whenever workspace changes
+  useEffect(() => {
+    window.api.chatInit(makeSystemPrompt(workspace))
+  }, [workspace])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })

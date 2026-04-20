@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import ModelBrowser from './components/ModelBrowser'
 import ChatView from './components/ChatView'
 import DownloadManager from './components/DownloadManager'
+import ImageGen from './components/ImageGen'
 import { ModelDef, LocalModel, DownloadEntry } from './types'
 import { MODELS } from './data/models'
 
-type View = 'models' | 'chat'
+type View = 'models' | 'chat' | 'images'
 
 export default function App() {
   const [view,         setView]         = useState<View>('models')
@@ -122,6 +123,9 @@ export default function App() {
           <button className={`nav-btn ${view === 'chat' ? 'active' : ''}`} onClick={() => setView('chat')} disabled={!activeModel}>
             💬 Chat
           </button>
+          <button className={`nav-btn ${view === 'images' ? 'active' : ''}`} onClick={() => setView('images')}>
+            🎨 Images
+          </button>
         </nav>
         <div className="titlebar-right">
           {activeModel && (
@@ -135,7 +139,7 @@ export default function App() {
 
       {/* Content */}
       <main className="main-content">
-        {view === 'models' ? (
+        {view === 'models' && (
           <ModelBrowser
             localModels={localModels}
             downloads={downloads}
@@ -144,9 +148,9 @@ export default function App() {
             loadingModel={loadingModel}
             activeModel={activeModel}
           />
-        ) : (
-          <ChatView model={activeModel!} workspace={workspace} />
         )}
+        {view === 'chat' && <ChatView model={activeModel!} workspace={workspace} />}
+        {view === 'images' && <ImageGen />}
       </main>
 
       {/* Steam-style download manager — bottom left, always visible */}

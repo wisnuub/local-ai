@@ -10,6 +10,7 @@ interface Window {
     onDownloadDone: (cb: (data: { filename: string }) => void) => () => void
     onDownloadError: (cb: (data: { filename: string; error: string }) => void) => () => void
     loadModel: (filename: string) => Promise<{ ok: boolean; error?: string }>
+    chatInit:  (systemPrompt: string) => Promise<{ ok: boolean; error?: string }>
     sendMessage: (message: string) => void
     onChatToken: (cb: (token: string) => void) => () => void
     onChatDone: (cb: () => void) => () => void
@@ -20,5 +21,24 @@ interface Window {
     listDir: (path: string) => Promise<{ ok: boolean; entries: Array<{ name: string; isDir: boolean; size: number }>; error?: string }>
     openFolder:      () => Promise<string | null>
     connectorSearch: (connectors: string[], query: string) => Promise<Record<string, Array<{ title: string; url?: string; snippet: string; source: string }>>>
+
+    imgCheckBin:      () => Promise<boolean>
+    imgScanModels:    () => Promise<string[]>
+    imgScanLoras:     () => Promise<string[]>
+    imgCancel:        () => Promise<boolean>
+    imgOpenLoraDir:   () => Promise<boolean>
+    imgDownloadBin:   () => void
+    imgDownloadModel: (url: string, filename: string) => void
+    imgGenerate:      (params: any) => void
+
+    onImgProgress:      (cb: (p: { step: number; total: number; percent: number }) => void) => () => void
+    onImgDone:          (cb: (d: { path: string }) => void) => () => void
+    onImgError:         (cb: (e: string) => void) => () => void
+    onImgBinProgress:   (cb: (p: { progress: number }) => void) => () => void
+    onImgBinDone:       (cb: () => void) => () => void
+    onImgBinError:      (cb: (e: string) => void) => () => void
+    onImgModelProgress: (cb: (p: { filename: string; received: number; total: number; progress: number }) => void) => () => void
+    onImgModelDone:     (cb: (d: { filename: string }) => void) => () => void
+    onImgModelError:    (cb: (d: { filename: string; error: string }) => void) => () => void
   }
 }
