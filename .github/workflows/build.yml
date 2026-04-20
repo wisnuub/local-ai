@@ -31,6 +31,13 @@ jobs:
         run: npx electron-builder --mac --arm64 --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false   # no signing — prevents "damaged" error
+
+      - name: Strip quarantine from DMGs
+        run: |
+          for f in dist/*.dmg; do
+            xattr -cr "$f" || true
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -79,7 +86,6 @@ jobs:
           name: windows-dist
           path: |
             dist/*.exe
-            dist/*.msi
           if-no-files-found: error
 
       - name: Release
@@ -88,6 +94,5 @@ jobs:
         with:
           files: |
             dist/*.exe
-            dist/*.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

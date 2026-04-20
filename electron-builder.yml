@@ -14,6 +14,8 @@ asarUnpack:
   - "node_modules/node-llama-cpp/src/**"
 
 mac:
+  identity: null          # no code signing — avoids "damaged" error
+  gatekeeperAssess: false
   target:
     - target: dmg
       arch:
