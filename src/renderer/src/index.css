@@ -527,5 +527,121 @@ pre { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, mon
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border); }
 
+/* ─── Download Manager (Steam-style bottom-left panel) ───────────────────────── */
+.dlm {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 320px;
+  background: rgba(15, 15, 16, 0.96);
+  border: 1px solid var(--border2);
+  border-bottom: none;
+  border-left: none;
+  border-radius: 0 10px 0 0;
+  backdrop-filter: blur(12px);
+  z-index: 40;
+  box-shadow: 4px -4px 24px rgba(0,0,0,.5);
+  font-size: 12px;
+}
+.dlm--collapsed { width: auto; min-width: 180px; }
+
+.dlm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--surface2);
+  border-radius: 0 10px 0 0;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+.dlm-header:hover { background: var(--surface3); }
+.dlm-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+.dlm-pulse {
+  width: 7px; height: 7px;
+  background: var(--accent);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(124,58,237,.4); }
+  50%       { opacity: 0.7; box-shadow: 0 0 0 5px rgba(124,58,237,0); }
+}
+
+.dlm-title { font-weight: 700; color: var(--text); white-space: nowrap; }
+.dlm-summary { color: var(--text3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dlm-chevron { color: var(--text3); font-size: 9px; flex-shrink: 0; }
+
+.dlm-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 12px; max-height: 340px; overflow-y: auto; }
+.dlm-body::-webkit-scrollbar { width: 3px; }
+.dlm-body::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.dlm-row { display: flex; flex-direction: column; gap: 5px; }
+
+.dlm-row-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.dlm-name { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+.dlm-controls { display: flex; gap: 4px; flex-shrink: 0; }
+.dlm-btn {
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  background: var(--surface3);
+  color: var(--text2);
+  font-size: 10px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+.dlm-btn:hover { background: var(--border2); color: var(--text); }
+.dlm-btn--danger:hover { background: var(--red); color: #fff; }
+
+/* Speed sparkline graph */
+.dlm-graph-row { display: flex; align-items: center; gap: 8px; }
+.dlm-spark { display: block; flex-shrink: 0; }
+.dlm-speed-label { font-size: 11px; color: var(--text2); white-space: nowrap; }
+
+.dlm-progress-track {
+  height: 4px;
+  background: var(--surface3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.dlm-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--blue));
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.dlm-progress-fill--paused {
+  background: var(--text3);
+  animation: none;
+}
+
+.dlm-row-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text3);
+  font-size: 10px;
+}
+
+.dlm-divider { height: 1px; background: var(--border); margin: 2px 0; }
+
+.dlm-completed { display: flex; flex-direction: column; gap: 4px; }
+
+.dlm-done-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+.dlm-done-icon { font-size: 11px; color: var(--green); flex-shrink: 0; }
+.dlm-done-icon--err { color: var(--red); }
+.dlm-done-name { flex: 1; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlm-done-size { color: var(--text3); white-space: nowrap; flex-shrink: 0; }
+
 /* ─── Selection ──────────────────────────────────────────────────────────────── */
 ::selection { background: var(--accent-dim); color: var(--text); }

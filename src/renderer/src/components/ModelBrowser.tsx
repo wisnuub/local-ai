@@ -1,55 +1,37 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useRef } from 'react'
 import { MODELS, CATEGORIES } from '../data/models'
-import { ModelDef, LocalModel, DownloadState } from '../types'
+import { ModelDef, LocalModel, DownloadEntry } from '../types'
 
 interface Props {
-  localModels: LocalModel[]
-  onRefreshLocal: () => void
-  onUseModel: (m: ModelDef) => void
+  localModels:  LocalModel[]
+  downloads:    Record<string, DownloadEntry>
+  onDownload:   (m: ModelDef) => void
+  onUseModel:   (m: ModelDef) => void
   loadingModel: boolean
-  activeModel: ModelDef | null
+  activeModel:  ModelDef | null
 }
 
-export default function ModelBrowser({ localModels, onRefreshLocal, onUseModel, loadingModel, activeModel }: Props) {
-  const [category, setCategory] = useState('all')
-  const [search, setSearch] = useState('')
-  const [downloads, setDownloads] = useState<Record<string, DownloadState>>({})
-  const [hfSearch, setHfSearch] = useState('')
-  const [hfResults, setHfResults] = useState<any[]>([])
-  const [hfLoading, setHfLoading] = useState(false)
+export default function ModelBrowser({ localModels, downloads, onDownload, onUseModel, loadingModel, activeModel }: Props) {
+  const [category,   setCategory]   = useState('all')
+  const [search,     setSearch]     = useState('')
+  const [hfSearch,   setHfSearch]   = useState('')
+  const [hfResults,  setHfResults]  = useState<any[]>([])
+  const [hfLoading,  setHfLoading]  = useState(false)
+  const hfTimer = useRef<any>(null)
 
-  // Attach download event listeners once
-  useEffect(() => {
-    const off1 = window.api.onDownloadProgress(({ filename, progress }) => {
-      setDownloads(prev => ({ ...prev, [filename]: { status: 'downloading', progress } }))
-    })
-    const off2 = window.api.onDownloadDone(({ filename }) => {
-      setDownloads(prev => ({ ...prev, [filename]: { status: 'done', progress: 1 } }))
-      onRefreshLocal()
-    })
-    const off3 = window.api.onDownloadError(({ filename, error }) => {
-      setDownloads(prev => ({ ...prev, [filename]: { status: 'error', progress: 0, error } }))
-    })
-    return () => { off1(); off2(); off3() }
-  }, [])
-
-  const isDownloaded = (m: ModelDef) => localModels.some(l => l.filename === m.filename)
-  const isDownloading = (m: ModelDef) => downloads[m.filename]?.status === 'downloading'
-
-  const handleDownload = (m: ModelDef) => {
-    setDownloads(prev => ({ ...prev, [m.filename]: { status: 'downloading', progress: 0 } }))
-    window.api.downloadModel(m.url, m.filename)
-  }
+  const isDownloaded  = (m: ModelDef) => localModels.some(l => l.filename === m.filename)
+  const dlEntry       = (m: ModelDef) => downloads[m.filename]
+  const isDownloading = (m: ModelDef) => dlEntry(m)?.status === 'downloading'
+  const isPaused      = (m: ModelDef) => dlEntry(m)?.status === 'paused'
 
   const filtered = MODELS.filter(m => {
     const matchCat = category === 'all' || m.categories.includes(category)
     const q = search.toLowerCase()
-    const matchSearch = !q || m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q) || m.tags.some(t => t.includes(q))
+    const matchSearch = !q || m.name.toLowerCase().includes(q) ||
+      m.description.toLowerCase().includes(q) || m.tags.some(t => t.includes(q))
     return matchCat && matchSearch
   })
 
-  // HuggingFace live search
-  const hfTimer = useRef<any>(null)
   const searchHF = (q: string) => {
     setHfSearch(q)
     clearTimeout(hfTimer.current)
@@ -57,11 +39,8 @@ export default function ModelBrowser({ localModels, onRefreshLocal, onUseModel, 
     hfTimer.current = setTimeout(async () => {
       setHfLoading(true)
       try {
-        const res = await fetch(
-          `https://huggingface.co/api/models?search=${encodeURIComponent(q)}&filter=gguf&sort=downloads&limit=12`
-        )
-        const data = await res.json()
-        setHfResults(data)
+        const res = await fetch(`https://huggingface.co/api/models?search=${encodeURIComponent(q)}&filter=gguf&sort=downloads&limit=12`)
+        setHfResults(await res.json())
       } catch { setHfResults([]) }
       setHfLoading(false)
     }, 500)
@@ -74,13 +53,8 @@ export default function ModelBrowser({ localModels, onRefreshLocal, onUseModel, 
         <div className="sidebar-section">
           <p className="sidebar-label">CATEGORY</p>
           {CATEGORIES.map(c => (
-            <button
-              key={c.id}
-              className={`sidebar-item ${category === c.id ? 'active' : ''}`}
-              onClick={() => setCategory(c.id)}
-            >
-              <span className="sidebar-icon">{c.icon}</span>
-              {c.label}
+            <button key={c.id} className={`sidebar-item ${category === c.id ? 'active' : ''}`} onClick={() => setCategory(c.id)}>
+              <span className="sidebar-icon">{c.icon}</span>{c.label}
             </button>
           ))}
         </div>
@@ -99,27 +73,16 @@ export default function ModelBrowser({ localModels, onRefreshLocal, onUseModel, 
         </div>
       </aside>
 
-      {/* Main panel */}
+      {/* Main */}
       <div className="browser-main">
-        {/* Search bar */}
         <div className="browser-search-row">
           <div className="search-wrap">
             <span className="search-icon">🔍</span>
-            <input
-              className="search-input"
-              placeholder="Filter models…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
+            <input className="search-input" placeholder="Filter models…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <div className="hf-search-wrap">
             <span className="search-icon">🤗</span>
-            <input
-              className="search-input"
-              placeholder="Browse HuggingFace…"
-              value={hfSearch}
-              onChange={e => searchHF(e.target.value)}
-            />
+            <input className="search-input" placeholder="Browse HuggingFace…" value={hfSearch} onChange={e => searchHF(e.target.value)} />
           </div>
         </div>
 
@@ -127,7 +90,7 @@ export default function ModelBrowser({ localModels, onRefreshLocal, onUseModel, 
         {(hfSearch || hfLoading) && (
           <div className="hf-results">
             <p className="section-title">
-              {hfLoading ? 'Searching HuggingFace…' : `HuggingFace results for "${hfSearch}"`}
+              {hfLoading ? 'Searching HuggingFace…' : `Results for "${hfSearch}"`}
             </p>
             <div className="model-grid">
               {hfResults.map(r => (
@@ -136,27 +99,15 @@ export default function ModelBrowser({ localModels, onRefreshLocal, onUseModel, 
                     <span className="card-name">{r.id}</span>
                     <span className="card-stat">↓ {(r.downloads / 1000).toFixed(0)}K</span>
                   </div>
-                  <p className="card-desc">{r.cardData?.language?.join(', ') || 'No description'}</p>
-                  <div className="card-tags">
-                    {(r.tags || []).slice(0, 4).map((t: string) => (
-                      <span key={t} className="tag">{t}</span>
-                    ))}
-                  </div>
-                  <a
-                    className="btn btn-outline"
-                    href={`https://huggingface.co/${r.id}`}
-                    target="_blank"
-                    rel="noopener"
-                  >
-                    View on HuggingFace ↗
-                  </a>
+                  <div className="card-tags">{(r.tags || []).slice(0, 4).map((t: string) => <span key={t} className="tag">{t}</span>)}</div>
+                  <a className="btn btn-outline" href={`https://huggingface.co/${r.id}`} target="_blank" rel="noopener">View on HuggingFace ↗</a>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Curated model grid */}
+        {/* Curated grid */}
         {!hfSearch && (
           <>
             <p className="section-title">
@@ -165,10 +116,12 @@ export default function ModelBrowser({ localModels, onRefreshLocal, onUseModel, 
             </p>
             <div className="model-grid">
               {filtered.map(m => {
-                const dl = downloads[m.filename]
+                const dl         = dlEntry(m)
                 const downloaded = isDownloaded(m)
                 const downloading = isDownloading(m)
-                const isActive = activeModel?.id === m.id
+                const paused     = isPaused(m)
+                const isActive   = activeModel?.id === m.id
+                const pct        = dl?.total ? (dl.received / dl.total) * 100 : 0
 
                 return (
                   <div key={m.id} className={`model-card ${isActive ? 'model-card--active' : ''}`}>
@@ -186,38 +139,28 @@ export default function ModelBrowser({ localModels, onRefreshLocal, onUseModel, 
                     </div>
 
                     <p className="card-desc">{m.description}</p>
+                    <div className="card-tags">{m.tags.map(t => <span key={t} className="tag">{t}</span>)}</div>
 
-                    <div className="card-tags">
-                      {m.tags.map(t => <span key={t} className="tag">{t}</span>)}
-                    </div>
-
-                    {/* Download progress bar */}
-                    {downloading && (
+                    {(downloading || paused) && dl && (
                       <div className="progress-wrap">
-                        <div className="progress-bar" style={{ width: `${(dl?.progress || 0) * 100}%` }} />
-                        <span className="progress-label">
-                          {Math.round((dl?.progress || 0) * 100)}%
-                        </span>
+                        <div className="progress-bar" style={{ width: `${pct}%`, opacity: paused ? 0.5 : 1 }} />
+                        <span className="progress-label">{pct.toFixed(0)}%{paused ? ' · Paused' : ''}</span>
                       </div>
                     )}
 
-                    {dl?.status === 'error' && (
-                      <p className="card-error">Error: {dl.error}</p>
-                    )}
+                    {dl?.status === 'error' && <p className="card-error">Error: {dl.error}</p>}
 
                     <div className="card-actions">
                       {downloaded ? (
-                        <button
-                          className="btn btn-primary"
-                          onClick={() => onUseModel(m)}
-                          disabled={loadingModel}
-                        >
+                        <button className="btn btn-primary" onClick={() => onUseModel(m)} disabled={loadingModel}>
                           {isActive ? '✓ Active' : 'Use Model →'}
                         </button>
                       ) : downloading ? (
-                        <button className="btn btn-ghost" disabled>Downloading…</button>
+                        <button className="btn btn-ghost" disabled>Downloading… {pct.toFixed(0)}%</button>
+                      ) : paused ? (
+                        <button className="btn btn-ghost" disabled>Paused — resume in download panel</button>
                       ) : (
-                        <button className="btn btn-download" onClick={() => handleDownload(m)}>
+                        <button className="btn btn-download" onClick={() => onDownload(m)}>
                           ↓ Download {m.sizeGb} GB
                         </button>
                       )}

@@ -17,9 +17,13 @@ export interface LocalModel {
   size: number
 }
 
-export type DownloadState = {
-  status: 'idle' | 'downloading' | 'done' | 'error'
-  progress: number
+export interface DownloadEntry {
+  filename: string
+  modelName: string
+  status: 'downloading' | 'paused' | 'done' | 'error'
+  received: number
+  total: number
+  speed: number        // bytes/sec
   error?: string
 }
 
@@ -34,11 +38,9 @@ export interface ToolCall {
   error?: string
 }
 
-export type MessageRole = 'user' | 'assistant' | 'system'
-
 export interface ChatMessage {
   id: string
-  role: MessageRole
+  role: 'user' | 'assistant' | 'system'
   content: string
   toolCalls?: ToolCall[]
   streaming?: boolean
