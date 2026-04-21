@@ -3,10 +3,12 @@ import { ChatMessage, ToolCall, ToolName, TodoItem, DiffFile } from '../types'
 import ConnectorBar, { CONNECTORS } from './ConnectorBar'
 
 interface Props {
-  modelName:        string
-  modelType:        'local' | 'api' | 'duo'
-  workspace:        string
-  duoReasonerName?: string
+  modelName:         string
+  modelType:         'local' | 'api' | 'duo'
+  workspace:         string
+  duoReasonerName?:  string
+  chatMode:          ChatMode
+  onChatModeChange:  (m: ChatMode) => void
 }
 
 type ChatMode   = 'chat' | 'agent'
@@ -207,14 +209,9 @@ function isReasonerModel(name: string) {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function ChatView({ modelName, modelType, workspace, duoReasonerName }: Props) {
+export default function ChatView({ modelName, modelType, workspace, duoReasonerName, chatMode, onChatModeChange }: Props) {
   const isThinkingModel = modelName.toLowerCase().includes('qwen3') || modelName.toLowerCase().includes('deepseek-r1')
   const isReasoner      = modelType !== 'duo' && isReasonerModel(modelName)
-
-  const [chatMode,     setChatMode]     = useState<ChatMode>(() => {
-    if (isReasonerModel(modelName)) return 'chat'
-    return (localStorage.getItem('chatMode') as ChatMode) ?? 'agent'
-  })
   const [layout,       setLayout]       = useState<Layout>(() => (localStorage.getItem('chatLayout') as Layout) ?? 'combined')
   const [showContext,  setShowContext]   = useState(false)
   const [messages,     setMessages]     = useState<ChatMessage[]>([{
@@ -267,10 +264,6 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, thinking])
 
-  const handleChatMode = (mode: ChatMode) => {
-    setChatMode(mode)
-    localStorage.setItem('chatMode', mode)
-  }
   const handleLayout = (l: Layout) => {
     setLayout(l)
     localStorage.setItem('chatLayout', l)
@@ -614,10 +607,10 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
   const topBar = (
     <div className="chat-topbar">
       <div className="mode-pills">
-        <button className={`mode-pill ${chatMode === 'chat' ? 'mode-pill--active' : ''}`} onClick={() => handleChatMode('chat')}>💬 Chat</button>
+        <button className={`mode-pill ${chatMode === 'chat' ? 'mode-pill--active' : ''}`} onClick={() => onChatModeChange('chat')}>💬 Chat</button>
         <button
           className={`mode-pill ${chatMode === 'agent' ? 'mode-pill--active' : ''} ${isReasoner ? 'mode-pill--disabled' : ''}`}
-          onClick={() => !isReasoner && handleChatMode('agent')}
+          onClick={() => !isReasoner && onChatModeChange('agent')}
           title={isReasoner ? 'Reasoning models don\'t follow tool-call format — use as Planner in Duo Mode instead' : undefined}
           disabled={isReasoner}
         >🤖 Agent</button>

@@ -26,9 +26,17 @@ export default function App() {
   const [workspace,     setWorkspace]     = useState('~')
   const [downloads,     setDownloads]     = useState<Record<string, DownloadEntry>>({})
   const [showSelector,  setShowSelector]  = useState(false)
+  const [chatMode,      setChatMode]      = useState<'chat' | 'agent'>(() =>
+    (localStorage.getItem('chatMode') as any) ?? 'agent'
+  )
   const [apiKeys,       setApiKeys]       = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('apiKeys') || '{}') } catch { return {} }
   })
+
+  const handleChatModeChange = (mode: 'chat' | 'agent') => {
+    setChatMode(mode)
+    localStorage.setItem('chatMode', mode)
+  }
 
   const refreshLocal = useCallback(async () => {
     setLocalModels(await window.api.listLocalModels())
@@ -148,6 +156,8 @@ export default function App() {
             modelType={activeModel.type}
             workspace={workspace}
             duoReasonerName={activeModel.duoConfig?.reasoner.name}
+            chatMode={chatMode}
+            onChatModeChange={handleChatModeChange}
           />
         )}
         {view === 'images' && <ImageGen />}
@@ -161,11 +171,14 @@ export default function App() {
           apiKeys={apiKeys}
           activeModel={activeModel}
           downloads={downloads}
+          chatMode={chatMode}
+          onChatModeChange={handleChatModeChange}
           onSelectLocal={selectLocalModel}
           onSelectApi={selectApiModel}
           onSelectDuo={selectDuoMode}
           onSaveKey={saveApiKey}
           onDownload={startDownload}
+          onDelete={handleDelete}
           onClose={() => setShowSelector(false)}
         />
       )}

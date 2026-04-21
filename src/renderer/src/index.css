@@ -1601,6 +1601,225 @@ pre { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, mon
   font-style: italic;
 }
 
+/* ─── Modal wider variant ────────────────────────────────────────────────────── */
+.model-modal--wide { width: 620px; }
+
+/* ─── Modal mode bar (Chat / Agent pills) ────────────────────────────────────── */
+.modal-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+  flex-shrink: 0;
+}
+.modal-mode-pills { display: flex; gap: 4px; }
+.modal-mode-pill {
+  padding: 5px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text3);
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+.modal-mode-pill:hover { color: var(--text2); border-color: var(--border2); }
+.modal-mode-pill--active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.modal-mode-hint { font-size: 11px; color: var(--text3); }
+
+/* ─── Modal tabs (Online / Offline / Downloaded) ─────────────────────────────── */
+.modal-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.modal-tab {
+  flex: 1;
+  padding: 10px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text3);
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.modal-tab:hover { color: var(--text2); }
+.modal-tab--active { color: var(--accent); border-bottom-color: var(--accent); }
+.modal-tab-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.modal-tab-count {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+/* ─── Filter note ────────────────────────────────────────────────────────────── */
+.modal-filter-note {
+  font-size: 12px;
+  color: var(--yellow);
+  background: rgba(245,158,11,.08);
+  border: 1px solid rgba(245,158,11,.2);
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin-bottom: 10px;
+}
+.modal-filter-note--info {
+  color: var(--blue);
+  background: rgba(99,102,241,.08);
+  border-color: rgba(99,102,241,.2);
+}
+
+/* ─── Offline model rows ─────────────────────────────────────────────────────── */
+.offline-model-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.offline-model-row:last-child { border-bottom: none; }
+.offline-model-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.offline-model-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.offline-model-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.offline-model-desc { font-size: 12px; color: var(--text3); line-height: 1.4; }
+.offline-model-meta { font-size: 11px; color: var(--text3); font-family: monospace; }
+.offline-dl-progress { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.offline-dl-pct { font-size: 11px; color: var(--text3); font-family: monospace; }
+.offline-dl-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.offline-dl-btn:hover:not(:disabled) { background: var(--accent-hover); }
+.offline-dl-btn:disabled { opacity: 0.6; cursor: not-allowed; background: var(--surface3); color: var(--text3); }
+.offline-dl-btn--active { background: var(--surface3); color: var(--text2); }
+.offline-empty { padding: 32px 0; text-align: center; color: var(--text3); font-size: 13px; line-height: 2; }
+
+/* ─── Downloaded model rows ──────────────────────────────────────────────────── */
+.downloaded-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+.downloaded-row:last-child { border-bottom: none; }
+.downloaded-row--active { background: var(--green-dim); }
+.downloaded-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.downloaded-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.downloaded-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.downloaded-active-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--green);
+  background: var(--green-dim);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+.downloaded-size { font-size: 12px; color: var(--text2); font-family: monospace; }
+.downloaded-path {
+  font-size: 10px;
+  color: var(--text3);
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.downloaded-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; margin-top: 2px; }
+.downloaded-use-btn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #fff;
+  transition: background 0.15s;
+}
+.downloaded-use-btn:hover { background: var(--accent-hover); }
+.downloaded-del-btn {
+  width: 30px; height: 30px;
+  border-radius: 6px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+  color: var(--text3);
+  transition: background 0.1s, color 0.1s;
+}
+.downloaded-del-btn:hover { background: rgba(239,68,68,.15); color: var(--red); border-color: rgba(239,68,68,.3); }
+
+/* ─── Agent capability pill ──────────────────────────────────────────────────── */
+.meta-pill--agent { background: #1e3a5f; color: #60a5fa; border: 1px solid #1e3a5f; }
+
+/* ─── Duo online note ────────────────────────────────────────────────────────── */
+.duo-online-note {
+  font-size: 12px;
+  color: var(--text2);
+  background: rgba(99,102,241,.08);
+  border: 1px solid rgba(99,102,241,.2);
+  border-radius: 6px;
+  padding: 8px 12px;
+  line-height: 1.5;
+}
+.duo-online-note strong { color: var(--text); }
+
+.duo-agent-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12px;
+  background: rgba(34,197,94,.08);
+  border: 1px solid rgba(34,197,94,.25);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.duo-agent-hint-text { flex: 1; color: var(--text2); }
+.duo-agent-hint-text strong { color: var(--text); }
+.duo-use-local-btn {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(34,197,94,.15);
+  border: 1px solid rgba(34,197,94,.35);
+  color: #4ade80;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.duo-use-local-btn:hover { background: rgba(34,197,94,.25); }
+
 /* ─── Conn dot (titlebar model button) ───────────────────────────────────────── */
 .conn-dot {
   width: 7px; height: 7px;
