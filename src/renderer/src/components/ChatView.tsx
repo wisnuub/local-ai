@@ -197,19 +197,33 @@ function toolDesc(tool: ToolName, args: Record<string, any>): string {
   }
 }
 
+// ─── Reasoner model detection ─────────────────────────────────────────────────
+
+const REASONER_PATTERNS = ['nemotron', 'deepseek-r1', 'deepseek/deepseek-r1', 'o1', 'o3']
+function isReasonerModel(name: string) {
+  const n = name.toLowerCase()
+  return REASONER_PATTERNS.some(p => n.includes(p))
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ChatView({ modelName, modelType, workspace, duoReasonerName }: Props) {
   const isThinkingModel = modelName.toLowerCase().includes('qwen3') || modelName.toLowerCase().includes('deepseek-r1')
+  const isReasoner      = modelType !== 'duo' && isReasonerModel(modelName)
 
-  const [chatMode,     setChatMode]     = useState<ChatMode>(() => (localStorage.getItem('chatMode') as ChatMode) ?? 'agent')
+  const [chatMode,     setChatMode]     = useState<ChatMode>(() => {
+    if (isReasonerModel(modelName)) return 'chat'
+    return (localStorage.getItem('chatMode') as ChatMode) ?? 'agent'
+  })
   const [layout,       setLayout]       = useState<Layout>(() => (localStorage.getItem('chatLayout') as Layout) ?? 'combined')
   const [showContext,  setShowContext]   = useState(false)
   const [messages,     setMessages]     = useState<ChatMessage[]>([{
     id: uid(), role: 'assistant',
     content: modelType === 'duo'
       ? `Duo mode active. **${duoReasonerName}** will plan, then I'll execute with tools.\n\nTell me what to build or fix.`
-      : `Hi! I'm **${modelName}**${modelType === 'api' ? ' via cloud' : ' running locally'}.\n\nTell me what to do — I'll explore your workspace, read files, make changes, and track progress with a todo list.`,
+      : isReasoner
+        ? `Hi! I'm **${modelName}**.\n\nI'm a reasoning model — best at analysis, planning, and complex thinking. I'm in **Chat mode** (no tools).\n\nFor coding tasks with file access, use me as the **Planner in Duo Mode** paired with a fast Groq model.`
+        : `Hi! I'm **${modelName}**${modelType === 'api' ? ' via cloud' : ' running locally'}.\n\nTell me what to do — I'll explore your workspace, read files, make changes, and track progress with a todo list.`,
   }])
   const [input,        setInput]        = useState('')
   const [generating,   setGenerating]   = useState(false)
@@ -601,7 +615,13 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
     <div className="chat-topbar">
       <div className="mode-pills">
         <button className={`mode-pill ${chatMode === 'chat' ? 'mode-pill--active' : ''}`} onClick={() => handleChatMode('chat')}>💬 Chat</button>
-        <button className={`mode-pill ${chatMode === 'agent' ? 'mode-pill--active' : ''}`} onClick={() => handleChatMode('agent')}>🤖 Agent</button>
+        <button
+          className={`mode-pill ${chatMode === 'agent' ? 'mode-pill--active' : ''} ${isReasoner ? 'mode-pill--disabled' : ''}`}
+          onClick={() => !isReasoner && handleChatMode('agent')}
+          title={isReasoner ? 'Reasoning models don\'t follow tool-call format — use as Planner in Duo Mode instead' : undefined}
+          disabled={isReasoner}
+        >🤖 Agent</button>
+        {isReasoner && <span className="reasoner-hint">Use as 🧠 Planner in Duo Mode for coding tasks</span>}
       </div>
       <div className="chat-topbar-right">
         <button className={`ctx-btn ${showContext ? 'ctx-btn--active' : ''}`} onClick={() => setShowContext(v => !v)}>Context</button>

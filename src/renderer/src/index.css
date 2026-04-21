@@ -1632,6 +1632,16 @@ pre { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, mon
 }
 .mode-pill:hover { color: var(--text2); border-color: var(--border2); }
 .mode-pill--active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.mode-pill--disabled { opacity: 0.35; cursor: not-allowed; }
+.reasoner-hint {
+  font-size: 11px;
+  color: #a78bfa;
+  background: #7c3aed18;
+  border: 1px solid #7c3aed30;
+  border-radius: 10px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
 .chat-topbar-right { display: flex; gap: 8px; align-items: center; }
 .ctx-btn {
   padding: 5px 12px;
