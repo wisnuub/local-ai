@@ -9,10 +9,11 @@ import { MODELS } from './data/models'
 import { FREE_MODELS, ApiModelDef } from './data/api-models'
 
 interface ActiveModel {
-  name:     string
-  type:     'local' | 'api'
+  name:      string
+  type:      'local' | 'api' | 'duo'
   localDef?: ModelDef
-  apiDef?:  ApiModelDef
+  apiDef?:   ApiModelDef
+  duoConfig?: { reasoner: ApiModelDef; executor: ApiModelDef }
 }
 
 type View = 'models' | 'chat' | 'images'
@@ -75,6 +76,21 @@ export default function App() {
     setView('chat')
   }
 
+  const selectDuoMode = async (reasoner: ApiModelDef, reasonerKey: string, executor: ApiModelDef, executorKey: string) => {
+    await window.api.chatSetDuo({
+      reasoner: { baseUrl: reasoner.baseUrl, modelId: reasoner.modelId, apiKey: reasonerKey },
+      executor: { baseUrl: executor.baseUrl, modelId: executor.modelId, apiKey: executorKey },
+    })
+    await window.api.chatResetHistory()
+    setActiveModel({
+      name: `${reasoner.name} + ${executor.name}`,
+      type: 'duo',
+      duoConfig: { reasoner, executor },
+    })
+    setShowSelector(false)
+    setView('chat')
+  }
+
   // ─── Download handlers ────────────────────────────────────────────────────
 
   const startDownload = useCallback((model: ModelDef) => {
@@ -105,7 +121,7 @@ export default function App() {
           {/* Model selector button — always visible, opens modal */}
           <button className="model-select-btn" onClick={() => setShowSelector(true)}>
             {activeModel
-              ? <><span className="model-select-dot" />{activeModel.name}</>
+              ? <><span className={`conn-dot ${activeModel.type === 'local' ? 'conn-dot--grey' : 'conn-dot--green'}`} />{activeModel.name}</>
               : <>Select model ▾</>
             }
           </button>
@@ -127,7 +143,12 @@ export default function App() {
           />
         )}
         {view === 'chat' && activeModel && (
-          <ChatView modelName={activeModel.name} modelType={activeModel.type} workspace={workspace} />
+          <ChatView
+            modelName={activeModel.name}
+            modelType={activeModel.type}
+            workspace={workspace}
+            duoReasonerName={activeModel.duoConfig?.reasoner.name}
+          />
         )}
         {view === 'images' && <ImageGen />}
       </main>
@@ -142,6 +163,7 @@ export default function App() {
           downloads={downloads}
           onSelectLocal={selectLocalModel}
           onSelectApi={selectApiModel}
+          onSelectDuo={selectDuoMode}
           onSaveKey={saveApiKey}
           onDownload={startDownload}
           onClose={() => setShowSelector(false)}

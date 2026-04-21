@@ -2,7 +2,92 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { ChatMessage, ToolCall, ToolName, TodoItem, DiffFile } from '../types'
 import ConnectorBar, { CONNECTORS } from './ConnectorBar'
 
-interface Props { modelName: string; modelType: 'local' | 'api'; workspace: string }
+interface Props {
+  modelName:        string
+  modelType:        'local' | 'api' | 'duo'
+  workspace:        string
+  duoReasonerName?: string
+}
+
+type ChatMode   = 'chat' | 'agent'
+type Layout     = 'combined' | 'split'
+
+interface SessionStats {
+  sessionStart:      Date
+  lastActivity:      Date
+  userMessages:      number
+  assistantMessages: number
+  totalTokens:       number
+  inputTokens:       number
+  outputTokens:      number
+  reasoningTokens:   number
+  cacheRead:         number
+  totalCostUsd:      number
+  contextLimit:      number
+}
+
+const MODEL_CONTEXT_LIMITS: Record<string, number> = {
+  'llama-3.3-70b-versatile':                     128_000,
+  'meta-llama/llama-4-scout-17b-16e-instruct':   131_072,
+  'qwen/qwen3-32b':                               32_768,
+  'openai/gpt-oss-120b':                         128_000,
+  'openai/gpt-oss-20b':                          128_000,
+  'llama-3.1-8b-instant':                        131_072,
+  'nvidia/llama-3.3-nemotron-super-49b-v1':      204_800,
+  'nvidia/llama-3.1-nemotron-nano-8b-v1':        128_000,
+  'meta-llama/llama-3.3-70b-instruct:free':      131_072,
+  'deepseek/deepseek-r1:free':                   163_840,
+  'google/gemma-3-27b-it:free':                  131_072,
+  'nvidia/llama-3.3-nemotron-super-49b-v1:free': 204_800,
+  'minimax-m2':                                  204_800,
+  'qwen-turbo':                                  1_000_000,
+  'qwen-plus':                                   131_072,
+  'qwen-max':                                    32_768,
+  'qwen2.5':                                     131_072,
+  'qwen3':                                       131_072,
+  'mistral-large':                               131_072,
+  'mistral-small':                               32_768,
+  'codestral':                                   262_144,
+  'mistral-nemo':                                131_072,
+  'mixtral-8x22b':                               65_536,
+}
+
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  'llama-3.3-70b-versatile':       { input: 0.59,  output: 0.79  },
+  'llama-3.1-8b-instant':          { input: 0.05,  output: 0.08  },
+  'gpt-4o':                        { input: 2.50,  output: 10.00 },
+  'gpt-4o-mini':                   { input: 0.15,  output: 0.60  },
+  'claude-sonnet-4-5':             { input: 3.00,  output: 15.00 },
+  'claude-opus-4-5':               { input: 15.00, output: 75.00 },
+  'claude-haiku-4-5-20251001':     { input: 0.80,  output: 4.00  },
+  'gemini-2.0-flash':              { input: 0.10,  output: 0.40  },
+  'gemini-1.5-pro':                { input: 1.25,  output: 5.00  },
+}
+
+function getContextLimit(modelName: string): number {
+  for (const [key, limit] of Object.entries(MODEL_CONTEXT_LIMITS)) {
+    if (modelName.toLowerCase().includes(key.toLowerCase())) return limit
+  }
+  return 4_096
+}
+
+function computeCost(modelName: string, usage: { prompt: number; completion: number }): number {
+  for (const [key, price] of Object.entries(MODEL_PRICING)) {
+    if (modelName.toLowerCase().includes(key.toLowerCase())) {
+      return (usage.prompt / 1_000_000) * price.input + (usage.completion / 1_000_000) * price.output
+    }
+  }
+  return 0
+}
+
+function friendlyError(raw: string): string {
+  if (raw.includes('401') || raw.includes('Unauthorized') || raw.includes('invalid_api_key')) return 'Invalid API key — check your key in the model selector'
+  if (raw.includes('429') || raw.includes('rate_limit') || raw.includes('Too Many Requests')) return 'Rate limited — wait a moment and try again'
+  if (raw.includes('503') || raw.includes('502') || raw.includes('500')) return 'Server error — the API is having issues, try again shortly'
+  if (raw.includes('ECONNREFUSED') || raw.includes('ENOTFOUND') || raw.includes('network')) return 'Connection failed — check your internet connection'
+  if (raw.includes('timed out')) return raw
+  return raw.length > 200 ? raw.slice(0, 200) + '…' : raw
+}
 
 const TOOL_ICONS: Record<ToolName, string> = {
   read_file:  '📄', write_file: '✏️', patch_file: '🔧', run_shell: '⚡', list_dir: '📁',
@@ -13,8 +98,13 @@ const TOOL_LABELS: Record<ToolName, string> = {
 const DESTRUCTIVE: ToolName[] = ['write_file', 'patch_file', 'run_shell']
 const MUTATING: ToolName[]    = ['write_file', 'patch_file']
 const MAX_STEPS = 12
+const TURN_TIMEOUT_MS = 30_000
 
-function makeSystemPrompt(workspace: string) {
+function makeChatSystemPrompt() {
+  return 'You are a helpful assistant. Answer clearly and concisely.'
+}
+
+function makeAgentSystemPrompt(workspace: string) {
   return `You are a highly capable local AI coding agent. Work autonomously like Claude — never ask the user to run commands or provide file contents. Find everything yourself using tools.
 
 Workspace: ${workspace}
@@ -79,8 +169,6 @@ function parseDoneTodo(text: string): string | null {
   return m ? m[1].trim() : null
 }
 
-// ─── Diff parser ──────────────────────────────────────────────────────────────
-
 function parseDiff(raw: string): DiffFile[] {
   const files: DiffFile[] = []
   const sections = raw.split(/^diff --git /m).filter(Boolean)
@@ -98,8 +186,6 @@ function parseDiff(raw: string): DiffFile[] {
   return files
 }
 
-// ─── Tool description helper ──────────────────────────────────────────────────
-
 function toolDesc(tool: ToolName, args: Record<string, any>): string {
   switch (tool) {
     case 'list_dir':   return `List ${args.path || '.'}`
@@ -113,27 +199,70 @@ function toolDesc(tool: ToolName, args: Record<string, any>): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function ChatView({ modelName, modelType, workspace }: Props) {
+export default function ChatView({ modelName, modelType, workspace, duoReasonerName }: Props) {
+  const isThinkingModel = modelName.toLowerCase().includes('qwen3') || modelName.toLowerCase().includes('deepseek-r1')
+
+  const [chatMode,     setChatMode]     = useState<ChatMode>(() => (localStorage.getItem('chatMode') as ChatMode) ?? 'agent')
+  const [layout,       setLayout]       = useState<Layout>(() => (localStorage.getItem('chatLayout') as Layout) ?? 'combined')
+  const [showContext,  setShowContext]   = useState(false)
   const [messages,     setMessages]     = useState<ChatMessage[]>([{
     id: uid(), role: 'assistant',
-    content: `Hi! I'm **${modelName}**${modelType === 'api' ? ' via cloud' : ' running locally'}.\n\nTell me what to do — I'll explore your workspace, read files, make changes, and track progress with a todo list.`,
+    content: modelType === 'duo'
+      ? `Duo mode active. **${duoReasonerName}** will plan, then I'll execute with tools.\n\nTell me what to build or fix.`
+      : `Hi! I'm **${modelName}**${modelType === 'api' ? ' via cloud' : ' running locally'}.\n\nTell me what to do — I'll explore your workspace, read files, make changes, and track progress with a todo list.`,
   }])
   const [input,        setInput]        = useState('')
   const [generating,   setGenerating]   = useState(false)
   const [thinking,     setThinking]     = useState(false)
-  const [pendingTool,  setPendingTool]  = useState<{ msgId: string; tool: ToolCall } | null>(null)
+  const [thinkMode,    setThinkMode]    = useState(false)
   const [activeConns,  setActiveConns]  = useState<Set<string>>(new Set())
   const [busyConns,    setBusyConns]    = useState<Set<string>>(new Set())
   const [diffFiles,    setDiffFiles]    = useState<DiffFile[]>([])
   const [selectedFile, setSelectedFile] = useState<DiffFile | null>(null)
   const [todos,        setTodos]        = useState<TodoItem[]>([])
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const inputRef  = useRef<HTMLTextAreaElement>(null)
+  const [stats,        setStats]        = useState<SessionStats>({
+    sessionStart:      new Date(),
+    lastActivity:      new Date(),
+    userMessages:      0,
+    assistantMessages: 0,
+    totalTokens:       0,
+    inputTokens:       0,
+    outputTokens:      0,
+    reasoningTokens:   0,
+    cacheRead:         0,
+    totalCostUsd:      0,
+    contextLimit:      getContextLimit(modelName),
+  })
 
-  useEffect(() => { window.api.chatInit(makeSystemPrompt(workspace)) }, [workspace])
+  // Push panel state
+  const [branches,     setBranches]     = useState<string[]>([])
+  const [curBranch,    setCurBranch]    = useState('main')
+  const [pushMsg,      setPushMsg]      = useState('')
+  const [pushLoading,  setPushLoading]  = useState(false)
+  const [pushing,      setPushing]      = useState(false)
+
+  const bottomRef     = useRef<HTMLDivElement>(null)
+  const inputRef      = useRef<HTMLTextAreaElement>(null)
+  const lastPromptRef = useRef<string>('')
+  const tokenTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => {
+    const sysPrompt = chatMode === 'chat' ? makeChatSystemPrompt() : makeAgentSystemPrompt(workspace)
+    window.api.chatInit(sysPrompt)
+  }, [workspace, chatMode])
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, thinking])
 
-  // ─── Git diff refresh ─────────────────────────────────────────────────────
+  const handleChatMode = (mode: ChatMode) => {
+    setChatMode(mode)
+    localStorage.setItem('chatMode', mode)
+  }
+  const handleLayout = (l: Layout) => {
+    setLayout(l)
+    localStorage.setItem('chatLayout', l)
+  }
+
+  // ─── Git diff + branches ──────────────────────────────────────────────────
 
   const refreshDiff = useCallback(async () => {
     if (workspace === '~') return
@@ -147,14 +276,60 @@ export default function ChatView({ modelName, modelType, workspace }: Props) {
     }
   }, [workspace, selectedFile])
 
+  const loadBranches = useCallback(async () => {
+    if (workspace === '~') return
+    const r = await window.api.runShell('git branch --format="%(refname:short)"', workspace)
+    if (r.ok && r.stdout) {
+      const bs = r.stdout.split('\n').map((s: string) => s.trim()).filter(Boolean)
+      setBranches(bs)
+    }
+    const rb = await window.api.runShell('git rev-parse --abbrev-ref HEAD', workspace)
+    if (rb.ok && rb.stdout) setCurBranch(rb.stdout.trim())
+  }, [workspace])
+
+  useEffect(() => { loadBranches() }, [loadBranches])
+
+  // ─── Push panel handlers ──────────────────────────────────────────────────
+
+  const generateCommitMsg = async () => {
+    setPushLoading(true)
+    try {
+      const diffR = await window.api.runShell('git diff HEAD', workspace)
+      const diff = diffR.ok ? diffR.stdout.slice(0, 3000) : ''
+      const r = await window.api.chatQuick(
+        `Write a concise git commit message (one line, under 72 chars, no quotes) for these changes:\n\n${diff || 'Various improvements'}`
+      )
+      if (r.ok) setPushMsg(r.text.trim().replace(/^["'`]|["'`]$/g, ''))
+    } finally {
+      setPushLoading(false)
+    }
+  }
+
+  const confirmPush = async () => {
+    if (!pushMsg.trim()) return
+    setPushing(true)
+    try {
+      await window.api.runShell('git add -A', workspace)
+      await window.api.runShell(`git commit -m ${JSON.stringify(pushMsg.trim())}`, workspace)
+      await window.api.runShell(`git push origin ${curBranch}`, workspace)
+      setPushMsg('')
+      await refreshDiff()
+    } finally {
+      setPushing(false)
+    }
+  }
+
   // ─── Token streaming ──────────────────────────────────────────────────────
 
-  const appendToken = useCallback((token: string) => {
+  const appendToken = useCallback((token: string, msgId: string) => {
     setMessages(prev => {
-      const last = prev[prev.length - 1]
-      if (last?.role === 'assistant' && last.streaming)
-        return [...prev.slice(0, -1), { ...last, content: last.content + token }]
-      return prev
+      const idx = prev.findIndex(m => m.id === msgId)
+      if (idx === -1) return prev
+      const msg = prev[idx]
+      if (!msg.streaming) return prev
+      const next = [...prev]
+      next[idx] = { ...msg, content: msg.content + token }
+      return next
     })
   }, [])
 
@@ -191,18 +366,12 @@ export default function ChatView({ modelName, modelType, workspace }: Props) {
       }
       case 'run_shell': {
         const r = await window.api.runShell(args.command || '', cwd)
-        if (r.ok && MUTATING.some(t => args.command?.includes('git'))) setTimeout(refreshDiff, 500)
+        if (r.ok && MUTATING.some(() => args.command?.includes('git'))) setTimeout(refreshDiff, 500)
         return r.ok ? [r.stdout, r.stderr].filter(Boolean).join('\n') || '(no output)' : `Error: ${r.error}`
       }
       default: return `Unknown tool: ${tool}`
     }
   }
-
-  // ─── Permission ───────────────────────────────────────────────────────────
-
-  const requestPermission = (msgId: string, toolCall: ToolCall): Promise<boolean> =>
-    new Promise(resolve => { setPendingTool({ msgId, tool: toolCall }); (window as any).__pr = resolve })
-  const handlePermission = (ok: boolean) => { setPendingTool(null); (window as any).__pr?.(ok) }
 
   // ─── Connector fetch ──────────────────────────────────────────────────────
 
@@ -224,37 +393,134 @@ export default function ChatView({ modelName, modelType, workspace }: Props) {
 
   // ─── Stream one turn ──────────────────────────────────────────────────────
 
-  const streamTurn = (msgId: string, prompt: string): Promise<string> =>
+  const streamTurn = useCallback((execMsgId: string, prompt: string, plannerMsgId?: string): Promise<{ text: string; usage: any }> =>
     new Promise(resolve => {
-      let full = '', first = true
-      const offT = window.api.onChatToken(t => { if (first) { first = false; setThinking(false) } full += t; appendToken(t) })
-      const offD = window.api.onChatDone(() => { offT(); offD(); resolve(full) })
-      const offE = window.api.onChatError(e => {
-        offT(); offE()
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, content: m.content || `Error: ${e}`, streaming: false } : m))
-        resolve('')
+      let full = '', thinkFull = '', firstToken = true
+
+      const cleanup = () => { offT(); offD(); offTT(); offTD(); offE(); clearTimeout(tokenTimerRef.current) }
+
+      const resetTimer = () => {
+        clearTimeout(tokenTimerRef.current)
+        tokenTimerRef.current = setTimeout(() => {
+          cleanup()
+          setMessages(prev => prev.map(m =>
+            m.id === execMsgId ? { ...m, content: '', streaming: false, error: 'Request timed out after 30 seconds — try again' } : m
+          ))
+          if (plannerMsgId) {
+            setMessages(prev => prev.map(m => m.id === plannerMsgId ? { ...m, streaming: false } : m))
+          }
+          setThinking(false)
+          resolve({ text: '', usage: null })
+        }, TURN_TIMEOUT_MS)
+      }
+
+      resetTimer()
+
+      const offTT = window.api.onChatThinkToken((t: string) => {
+        resetTimer()
+        thinkFull += t
+        if (plannerMsgId) {
+          setMessages(prev => prev.map(m => m.id === plannerMsgId ? { ...m, content: thinkFull } : m))
+        }
       })
+      const offTD = window.api.onChatThinkDone(() => {
+        if (plannerMsgId) {
+          setMessages(prev => prev.map(m => m.id === plannerMsgId ? { ...m, streaming: false } : m))
+        }
+        setThinking(true)
+      })
+
+      const offT = window.api.onChatToken((t: string) => {
+        resetTimer()
+        if (firstToken) { firstToken = false; setThinking(false) }
+        full += t
+        appendToken(t, execMsgId)
+      })
+      const offD = window.api.onChatDone(({ usage }: { usage?: any }) => {
+        cleanup()
+        if (usage) {
+          setStats(s => ({
+            ...s,
+            lastActivity:      new Date(),
+            assistantMessages: s.assistantMessages + 1,
+            totalTokens:       s.totalTokens + (usage.prompt ?? 0) + (usage.completion ?? 0),
+            inputTokens:       s.inputTokens + (usage.prompt ?? 0),
+            outputTokens:      s.outputTokens + (usage.completion ?? 0),
+            reasoningTokens:   s.reasoningTokens + (usage.reasoning ?? 0),
+            cacheRead:         s.cacheRead + (usage.cacheRead ?? 0),
+            totalCostUsd:      s.totalCostUsd + computeCost(modelName, usage),
+          }))
+        }
+        resolve({ text: full, usage: usage ?? null })
+      })
+      const offE = window.api.onChatError((e: string) => {
+        cleanup()
+        const friendly = friendlyError(e)
+        setMessages(prev => prev.map(m =>
+          m.id === execMsgId ? { ...m, content: '', streaming: false, error: friendly } : m
+        ))
+        if (plannerMsgId) {
+          setMessages(prev => prev.map(m => m.id === plannerMsgId ? { ...m, streaming: false } : m))
+        }
+        setThinking(false)
+        resolve({ text: '', usage: null })
+      })
+
       window.api.sendMessage(prompt)
     })
+  , [appendToken, modelName])
+
+  // ─── Chat turn (no tools) ─────────────────────────────────────────────────
+
+  const runChatTurn = useCallback(async (userText: string) => {
+    const connCtx = await fetchCtx(userText)
+    const prompt = connCtx ? `[Context]\n${connCtx}\n\n---\n${userText}` : userText
+    lastPromptRef.current = prompt
+    setGenerating(true); setThinking(true)
+
+    let plannerMsgId: string | undefined
+    if (modelType === 'duo') {
+      plannerMsgId = uid()
+      setMessages(prev => [...prev, { id: plannerMsgId!, role: 'planner', content: '', streaming: true }])
+    }
+    const aId = uid()
+    const role = modelType === 'duo' ? 'executor' : 'assistant'
+    setMessages(prev => [...prev, { id: aId, role, content: '', streaming: true }])
+
+    await streamTurn(aId, prompt, plannerMsgId)
+    setMessages(prev => prev.map(m => m.id === aId ? { ...m, streaming: false } : m))
+
+    setThinking(false); setGenerating(false)
+    inputRef.current?.focus()
+  }, [fetchCtx, streamTurn, modelType])
 
   // ─── Agent loop ───────────────────────────────────────────────────────────
 
   const runAgentTurn = useCallback(async (userText: string) => {
     const connCtx = await fetchCtx(userText)
     const firstPrompt = connCtx ? `[Context]\n${connCtx}\n\n---\n${userText}` : userText
+    lastPromptRef.current = firstPrompt
     setGenerating(true); setThinking(true)
 
     let nextPrompt = firstPrompt
     let currentTodos: TodoItem[] = []
 
     for (let step = 0; step < MAX_STEPS; step++) {
-      const aId = uid()
-      setMessages(prev => [...prev, { id: aId, role: 'assistant', content: '', streaming: true }])
+      let plannerMsgId: string | undefined
+      if (modelType === 'duo' && step === 0) {
+        plannerMsgId = uid()
+        setMessages(prev => [...prev, { id: plannerMsgId!, role: 'planner', content: '', streaming: true }])
+      }
 
-      const fullText = await streamTurn(aId, nextPrompt)
+      const aId = uid()
+      const role = modelType === 'duo' ? 'executor' : 'assistant'
+      setMessages(prev => [...prev, { id: aId, role, content: '', streaming: true }])
+
+      const { text: fullText } = await streamTurn(aId, nextPrompt, plannerMsgId)
       setMessages(prev => prev.map(m => m.id === aId ? { ...m, streaming: false } : m))
 
-      // Parse todos from first response
+      if (!fullText) break // timeout or error
+
       const todosFromText = parseTodos(fullText)
       if (todosFromText) {
         currentTodos = todosFromText
@@ -262,7 +528,6 @@ export default function ChatView({ modelName, modelType, workspace }: Props) {
         setMessages(prev => prev.map(m => m.id === aId ? { ...m, todos: todosFromText } : m))
       }
 
-      // Mark a todo done
       const doneTodo = parseDoneTodo(fullText)
       if (doneTodo && currentTodos.length) {
         currentTodos = currentTodos.map(t =>
@@ -271,13 +536,11 @@ export default function ChatView({ modelName, modelType, workspace }: Props) {
         setTodos([...currentTodos])
       }
 
-      // Tool call?
       const parsed = parseToolCall(fullText)
       if (!parsed) break
 
       const { tool, args } = parsed
-      const isDestructive = DESTRUCTIVE.includes(tool)
-      const tc: ToolCall = { id: uid(), tool, args, status: isDestructive ? 'pending-permission' : 'running' }
+      const tc: ToolCall = { id: uid(), tool, args, status: 'running' }
 
       setMessages(prev => prev.map(m => m.id === aId ? { ...m, toolCalls: [...(m.toolCalls || []), tc] } : m))
 
@@ -286,12 +549,6 @@ export default function ChatView({ modelName, modelType, workspace }: Props) {
           m.id !== aId ? m : { ...m, toolCalls: m.toolCalls?.map(t => t.id === tc.id ? { ...t, status, result } : t) }
         ))
 
-      if (isDestructive) {
-        const ok = await requestPermission(aId, tc)
-        if (!ok) { updateTool('denied'); break }
-      }
-
-      updateTool('running')
       const result = await executeTool(tool, args)
       updateTool('done', result)
 
@@ -301,7 +558,22 @@ export default function ChatView({ modelName, modelType, workspace }: Props) {
 
     setThinking(false); setGenerating(false)
     inputRef.current?.focus()
-  }, [appendToken, fetchCtx, workspace, refreshDiff])
+  }, [fetchCtx, streamTurn, modelType, workspace, refreshDiff])
+
+  // ─── Retry ────────────────────────────────────────────────────────────────
+
+  const retryLast = useCallback(() => {
+    if (!lastPromptRef.current || generating) return
+    // Remove last error message
+    setMessages(prev => {
+      const last = prev[prev.length - 1]
+      if (last?.error) return prev.slice(0, -1)
+      return prev
+    })
+    const prompt = lastPromptRef.current
+    if (chatMode === 'chat') runChatTurn(prompt)
+    else runAgentTurn(prompt)
+  }, [generating, chatMode, runChatTurn, runAgentTurn])
 
   // ─── Submit ───────────────────────────────────────────────────────────────
 
@@ -309,141 +581,383 @@ export default function ChatView({ modelName, modelType, workspace }: Props) {
     const text = input.trim(); if (!text || generating) return
     setInput('')
     setMessages(prev => [...prev, { id: uid(), role: 'user', content: text }])
-    runAgentTurn(text)
+    setStats(s => ({ ...s, userMessages: s.userMessages + 1, lastActivity: new Date() }))
+    const prompt = thinkMode && isThinkingModel ? `/think\n${text}` : text
+    if (chatMode === 'chat') runChatTurn(prompt)
+    else runAgentTurn(prompt)
   }
   const handleKey = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
-  const hasDiff = diffFiles.length > 0
+  const hasDiff     = diffFiles.length > 0
+  const isDuo       = modelType === 'duo'
+  const showSplit   = isDuo && layout === 'split'
 
-  return (
-    <div className="chat-root">
-      {/* Permission overlay */}
-      {pendingTool && (
-        <div className="permission-overlay">
-          <div className="permission-dialog">
-            <div className="permission-header">
-              <span className="permission-icon">🔐</span>
-              <span className="permission-title">Allow action?</span>
-            </div>
-            <p className="permission-body">
-              The AI wants to run <strong>{TOOL_ICONS[pendingTool.tool.tool]} {pendingTool.tool.tool}</strong>
-            </p>
-            <div className="permission-args">
-              {Object.entries(pendingTool.tool.args).map(([k, v]) => (
-                <div key={k} className="permission-arg">
-                  <span className="permission-key">{k}</span>
-                  <span className="permission-val">{String(v).slice(0, 200)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="permission-actions">
-              <button className="btn btn-deny" onClick={() => handlePermission(false)}>✕ Deny</button>
-              <button className="btn btn-allow" onClick={() => handlePermission(true)}>✓ Allow</button>
-            </div>
-          </div>
-        </div>
-      )}
+  const plannerMsgs  = messages.filter(m => m.role === 'planner')
+  const mainMsgs     = messages.filter(m => m.role !== 'planner')
 
-      {/* Left: chat */}
-      <div className="chat">
-        <div className="chat-messages">
-          {messages.map(msg => (
-            <div key={msg.id} className={`message message--${msg.role}`}>
-              {msg.role === 'assistant' && <div className="message-avatar">🤖</div>}
-              <div className="message-body">
-                {/* Todos block */}
-                {msg.todos && msg.todos.length > 0 && (
-                  <TodoBlock todos={msg.todos} live={todos} />
-                )}
-                {/* Compact tool steps */}
-                {msg.toolCalls?.map(tc => <ToolStep key={tc.id} tc={tc} />)}
-                {/* Text content */}
-                {msg.content && <MarkdownText text={msg.content} streaming={msg.streaming} />}
-              </div>
-              {msg.role === 'user' && <div className="message-avatar">👤</div>}
-            </div>
-          ))}
-
-          {thinking && (
-            <div className="message message--assistant">
-              <div className="message-avatar">🤖</div>
-              <div className="message-body">
-                <div className="thinking-row">
-                  <span className="thinking-label">Thinking</span>
-                  <span className="thinking-dots"><span /><span /><span /></span>
-                </div>
-              </div>
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
-
-        <ConnectorBar active={activeConns} onChange={setActiveConns} busy={busyConns} />
-
-        <div className="chat-input-wrap">
-          <div className="chat-input-box">
-            <textarea
-              ref={inputRef}
-              className="chat-input"
-              placeholder={generating ? 'Working…' : 'Ask anything…'}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKey}
-              rows={1}
-              disabled={generating}
-            />
-            <button className={`send-btn ${generating ? 'sending' : ''}`} onClick={submit} disabled={generating || !input.trim()}>
-              {generating ? <span className="spin">◌</span> : '↑'}
-            </button>
-          </div>
-          <p className="chat-hint">{modelName} · {workspace !== '~' ? workspace.split('/').pop() : 'no workspace'} · {modelType === 'api' ? 'cloud' : 'offline'}</p>
-        </div>
+  const topBar = (
+    <div className="chat-topbar">
+      <div className="mode-pills">
+        <button className={`mode-pill ${chatMode === 'chat' ? 'mode-pill--active' : ''}`} onClick={() => handleChatMode('chat')}>💬 Chat</button>
+        <button className={`mode-pill ${chatMode === 'agent' ? 'mode-pill--active' : ''}`} onClick={() => handleChatMode('agent')}>🤖 Agent</button>
       </div>
-
-      {/* Right: git diff panel */}
-      <div className={`diff-panel ${hasDiff ? 'diff-panel--open' : ''}`}>
-        <div className="diff-panel-header">
-          <span className="diff-panel-title">Git changes</span>
-          {hasDiff && (
-            <button className="btn-tiny" onClick={refreshDiff} title="Refresh diff">↻</button>
-          )}
-        </div>
-
-        {hasDiff ? (
-          <>
-            <div className="diff-file-list">
-              {diffFiles.map(f => (
-                <button
-                  key={f.path}
-                  className={`diff-file-row ${selectedFile?.path === f.path ? 'diff-file-row--active' : ''}`}
-                  onClick={() => setSelectedFile(f)}
-                >
-                  <span className="diff-file-icon">📄</span>
-                  <span className="diff-file-path">{f.path}</span>
-                  <span className="diff-stat-add">+{f.added}</span>
-                  <span className="diff-stat-rm">-{f.removed}</span>
-                </button>
-              ))}
-            </div>
-            {selectedFile && (
-              <div className="diff-hunk-view">
-                <DiffHunk raw={selectedFile.hunks} />
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="diff-empty">
-            <span className="diff-empty-icon">📂</span>
-            <p>No git changes yet</p>
-            <p className="diff-empty-sub">Changes appear here after the AI edits files</p>
-          </div>
+      <div className="chat-topbar-right">
+        <button className={`ctx-btn ${showContext ? 'ctx-btn--active' : ''}`} onClick={() => setShowContext(v => !v)}>Context</button>
+        {isDuo && (
+          <button className="layout-btn" onClick={() => handleLayout(layout === 'combined' ? 'split' : 'combined')}>
+            {layout === 'split' ? '⊞ Combined' : '⊟ Split'}
+          </button>
         )}
       </div>
     </div>
   )
+
+  const inputBar = (
+    <>
+      <ConnectorBar active={activeConns} onChange={setActiveConns} busy={busyConns} />
+      <div className="chat-input-wrap">
+        <div className="chat-input-box">
+          <textarea
+            ref={inputRef}
+            className="chat-input"
+            placeholder={generating ? 'Working…' : 'Ask anything…'}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKey}
+            rows={1}
+            disabled={generating}
+          />
+          <button className={`send-btn ${generating ? 'sending' : ''}`} onClick={submit} disabled={generating || !input.trim()}>
+            {generating ? <span className="spin">◌</span> : '↑'}
+          </button>
+        </div>
+        <div className="chat-hint-row">
+          <p className="chat-hint">
+            {modelName} · {workspace !== '~' ? workspace.split('/').pop() : 'no workspace'} · {modelType === 'duo' ? 'duo mode' : modelType === 'api' ? 'cloud' : 'offline'}
+            {stats.totalTokens > 0 && <span className="token-hint"> · ~{fmtTokens(stats.totalTokens)} tokens</span>}
+          </p>
+          {isThinkingModel && modelType !== 'duo' && (
+            <button
+              className={`think-toggle ${thinkMode ? 'think-toggle--on' : ''}`}
+              onClick={() => setThinkMode(v => !v)}
+              title="Toggle thinking mode"
+            >
+              🧠 {thinkMode ? 'Thinking on' : 'Thinking off'}
+            </button>
+          )}
+        </div>
+      </div>
+    </>
+  )
+
+  const renderMessages = (msgs: ChatMessage[], filterRole?: string) => {
+    const list = filterRole ? msgs.filter(m => m.role === filterRole || m.role === 'user') : msgs
+    return list.map(msg => {
+      const isUser    = msg.role === 'user'
+      const isPlanner = msg.role === 'planner'
+      const isExecutor = msg.role === 'executor'
+      return (
+        <div key={msg.id} className={`message message--${isUser ? 'user' : isPlanner ? 'planner' : isExecutor ? 'executor' : 'assistant'}`}>
+          {!isUser && (
+            <div className={`message-avatar ${isPlanner ? 'avatar--planner' : isExecutor ? 'avatar--executor' : ''}`}>
+              {isPlanner ? '🧠' : isExecutor ? '🤖' : '🤖'}
+            </div>
+          )}
+          <div className="message-body">
+            {(isPlanner || isExecutor) && (
+              <div className={`author-chip ${isPlanner ? 'author-chip--planner' : 'author-chip--executor'}`}>
+                {isPlanner ? (duoReasonerName ?? 'Planner') : modelName}
+              </div>
+            )}
+            {msg.todos && msg.todos.length > 0 && <TodoBlock todos={msg.todos} live={todos} />}
+            {msg.toolCalls?.map(tc => <ToolStep key={tc.id} tc={tc} />)}
+            {msg.content && <MarkdownText text={msg.content} streaming={msg.streaming} />}
+            {msg.error && (
+              <div className="msg-error">
+                <span className="msg-error-icon">⚠</span>
+                <span>{msg.error}</span>
+                <button className="retry-btn" onClick={retryLast}>Retry ↺</button>
+              </div>
+            )}
+          </div>
+          {isUser && <div className="message-avatar">👤</div>}
+        </div>
+      )
+    })
+  }
+
+  const thinkingIndicator = thinking && (
+    <div className="message message--assistant">
+      <div className="message-avatar">🤖</div>
+      <div className="message-body">
+        <div className="thinking-row">
+          <span className="thinking-label">{modelType === 'duo' ? 'Executing' : 'Thinking'}</span>
+          <span className="thinking-dots"><span /><span /><span /></span>
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="chat-root">
+      {showContext && (
+        <ContextPanel stats={stats} messages={messages} modelName={modelName} onClose={() => setShowContext(false)} />
+      )}
+
+      {showSplit ? (
+        // ── Split layout ───────────────────────────────────────────────────
+        <div className="chat-split">
+          {/* Left: planner column */}
+          <div className="chat-split-col chat-split-col--planner">
+            <div className="split-col-header">
+              <span className="author-chip author-chip--planner">{duoReasonerName ?? 'Planner'}</span>
+            </div>
+            <div className="chat-messages">
+              {renderMessages(plannerMsgs)}
+              <div ref={bottomRef} />
+            </div>
+          </div>
+
+          {/* Right: executor + diff + push */}
+          <div className="chat-split-col chat-split-col--executor">
+            <div className="split-col-header">
+              <span className="author-chip author-chip--executor">{modelName}</span>
+            </div>
+            <div className="chat-messages">
+              {renderMessages(mainMsgs)}
+              {thinkingIndicator}
+              <div />
+            </div>
+            <DiffAndPush
+              hasDiff={hasDiff} diffFiles={diffFiles} selectedFile={selectedFile}
+              setSelectedFile={setSelectedFile} refreshDiff={refreshDiff}
+              branches={branches} curBranch={curBranch} setCurBranch={setCurBranch}
+              pushMsg={pushMsg} setPushMsg={setPushMsg}
+              pushLoading={pushLoading} pushing={pushing}
+              generateCommitMsg={generateCommitMsg} confirmPush={confirmPush}
+              workspace={workspace}
+            />
+            {topBar}
+            {inputBar}
+          </div>
+        </div>
+      ) : (
+        // ── Combined layout ────────────────────────────────────────────────
+        <>
+          <div className="chat">
+            {topBar}
+            <div className="chat-messages">
+              {renderMessages(messages)}
+              {thinkingIndicator}
+              <div ref={bottomRef} />
+            </div>
+            {inputBar}
+          </div>
+
+          {/* Right: diff + push panel */}
+          <div className={`diff-panel ${hasDiff ? 'diff-panel--open' : ''}`}>
+            <DiffAndPush
+              hasDiff={hasDiff} diffFiles={diffFiles} selectedFile={selectedFile}
+              setSelectedFile={setSelectedFile} refreshDiff={refreshDiff}
+              branches={branches} curBranch={curBranch} setCurBranch={setCurBranch}
+              pushMsg={pushMsg} setPushMsg={setPushMsg}
+              pushLoading={pushLoading} pushing={pushing}
+              generateCommitMsg={generateCommitMsg} confirmPush={confirmPush}
+              workspace={workspace}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
+
+// ─── Diff + Push panel ────────────────────────────────────────────────────────
+
+interface DiffPushProps {
+  hasDiff: boolean; diffFiles: DiffFile[]; selectedFile: DiffFile | null
+  setSelectedFile: (f: DiffFile | null) => void; refreshDiff: () => void
+  branches: string[]; curBranch: string; setCurBranch: (b: string) => void
+  pushMsg: string; setPushMsg: (m: string) => void
+  pushLoading: boolean; pushing: boolean
+  generateCommitMsg: () => void; confirmPush: () => void
+  workspace: string
+}
+
+function DiffAndPush({ hasDiff, diffFiles, selectedFile, setSelectedFile, refreshDiff, branches, curBranch, setCurBranch, pushMsg, setPushMsg, pushLoading, pushing, generateCommitMsg, confirmPush, workspace }: DiffPushProps) {
+  return (
+    <>
+      <div className="diff-panel-header">
+        <span className="diff-panel-title">Git changes</span>
+        {hasDiff && <button className="btn-tiny" onClick={refreshDiff} title="Refresh diff">↻</button>}
+      </div>
+
+      {hasDiff ? (
+        <>
+          <div className="diff-file-list">
+            {diffFiles.map(f => (
+              <button
+                key={f.path}
+                className={`diff-file-row ${selectedFile?.path === f.path ? 'diff-file-row--active' : ''}`}
+                onClick={() => setSelectedFile(f)}
+              >
+                <span className="diff-file-icon">📄</span>
+                <span className="diff-file-path">{f.path}</span>
+                <span className="diff-stat-add">+{f.added}</span>
+                <span className="diff-stat-rm">-{f.removed}</span>
+              </button>
+            ))}
+          </div>
+          {selectedFile && (
+            <div className="diff-hunk-view">
+              <DiffHunk raw={selectedFile.hunks} />
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="diff-empty">
+          <span className="diff-empty-icon">📂</span>
+          <p>No git changes yet</p>
+          <p className="diff-empty-sub">Changes appear here after the AI edits files</p>
+        </div>
+      )}
+
+      {/* Push section */}
+      {workspace !== '~' && (
+        <div className="push-panel">
+          <div className="push-panel-header">
+            <span className="push-panel-title">↑ Push changes</span>
+            {branches.length > 0 && (
+              <select className="branch-select" value={curBranch} onChange={e => setCurBranch(e.target.value)}>
+                {branches.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            )}
+          </div>
+          <div className="push-msg-row">
+            <textarea
+              className="push-msg-input"
+              placeholder="Commit message…"
+              value={pushMsg}
+              onChange={e => setPushMsg(e.target.value)}
+              rows={2}
+            />
+            <button className="push-gen-btn" onClick={generateCommitMsg} disabled={pushLoading} title="Generate commit message with AI">
+              {pushLoading ? <span className="spin">◌</span> : '✨'}
+            </button>
+          </div>
+          <button
+            className="push-confirm-btn"
+            disabled={!pushMsg.trim() || pushing}
+            onClick={confirmPush}
+          >
+            {pushing ? <><span className="spin">◌</span> Pushing…</> : `↑ Push to ${curBranch}`}
+          </button>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ─── Context Panel ────────────────────────────────────────────────────────────
+
+function ContextPanel({ stats, messages, modelName, onClose }: {
+  stats: SessionStats; messages: ChatMessage[]; modelName: string; onClose: () => void
+}) {
+  const usagePct = stats.contextLimit > 0
+    ? Math.min(100, Math.round((stats.inputTokens / stats.contextLimit) * 100)) : 0
+
+  const userTokens      = messages.filter(m => m.role === 'user').reduce((a, m) => a + Math.ceil(m.content.length / 4), 0)
+  const assistantTokens = messages.filter(m => m.role !== 'user' && m.role !== 'system').reduce((a, m) => a + Math.ceil(m.content.length / 4), 0)
+  const toolTokens      = messages.reduce((a, m) => a + (m.toolCalls?.reduce((b, tc) => b + Math.ceil((tc.result?.length ?? 0) / 4), 0) ?? 0), 0)
+  const totalEst        = Math.max(1, userTokens + assistantTokens + toolTokens)
+
+  const [rawOpen, setRawOpen] = useState<Record<string, boolean>>({})
+
+  return (
+    <div className="context-panel">
+      <div className="context-header">
+        <span className="context-title">Context</span>
+        <button className="context-close" onClick={onClose}>✕</button>
+      </div>
+      <div className="context-body">
+        <div className="ctx-grid">
+          <StatCell label="Session start"     value={fmtTime(stats.sessionStart)} />
+          <StatCell label="Messages"          value={stats.userMessages + stats.assistantMessages} />
+          <StatCell label="Model"             value={modelName} mono />
+          <StatCell label="Context limit"     value={fmtNum(stats.contextLimit)} />
+          <StatCell label="Total tokens"      value={fmtNum(stats.totalTokens)} />
+          <StatCell label="Usage"             value={`${usagePct}%`} highlight={usagePct > 80} />
+          <StatCell label="Input tokens"      value={fmtNum(stats.inputTokens)} />
+          <StatCell label="Output tokens"     value={fmtNum(stats.outputTokens)} />
+          <StatCell label="Reasoning tokens"  value={fmtNum(stats.reasoningTokens)} />
+          <StatCell label="Cache read"        value={fmtNum(stats.cacheRead)} />
+          <StatCell label="User messages"     value={stats.userMessages} />
+          <StatCell label="AI messages"       value={stats.assistantMessages} />
+          <StatCell label="Total cost"        value={`$${stats.totalCostUsd.toFixed(4)}`} />
+          <StatCell label="Last activity"     value={fmtTime(stats.lastActivity)} />
+        </div>
+
+        <div className="ctx-breakdown">
+          <p className="ctx-section-label">Context breakdown</p>
+          <div className="ctx-bar-track">
+            <div className="ctx-bar-fill ctx-bar-fill--user"    style={{ width: `${Math.round(userTokens / totalEst * 100)}%` }} />
+            <div className="ctx-bar-fill ctx-bar-fill--asst"    style={{ width: `${Math.round(assistantTokens / totalEst * 100)}%` }} />
+            <div className="ctx-bar-fill ctx-bar-fill--tool"    style={{ width: `${Math.round(toolTokens / totalEst * 100)}%` }} />
+          </div>
+          <div className="ctx-bar-labels">
+            <span><span className="ctx-dot ctx-dot--user" />User {Math.round(userTokens / totalEst * 100)}%</span>
+            <span><span className="ctx-dot ctx-dot--asst" />Assistant {Math.round(assistantTokens / totalEst * 100)}%</span>
+            <span><span className="ctx-dot ctx-dot--tool" />Tools {Math.round(toolTokens / totalEst * 100)}%</span>
+          </div>
+        </div>
+
+        <div className="ctx-raw">
+          <p className="ctx-section-label">Raw messages</p>
+          {messages.map(m => (
+            <div key={m.id} className="raw-msg-row">
+              <button className="raw-msg-toggle" onClick={() => setRawOpen(p => ({ ...p, [m.id]: !p[m.id] }))}>
+                <span className={`raw-msg-role raw-msg-role--${m.role}`}>{m.role}</span>
+                <span className="raw-msg-preview">{m.content.slice(0, 60).replace(/\n/g, ' ')}</span>
+                <span className="raw-msg-len">~{Math.ceil(m.content.length / 4)} t</span>
+                <span className="raw-msg-chevron">{rawOpen[m.id] ? '▲' : '▼'}</span>
+              </button>
+              {rawOpen[m.id] && <pre className="raw-msg-body">{m.content.slice(0, 2000)}</pre>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StatCell({ label, value, mono, highlight }: { label: string; value: string | number; mono?: boolean; highlight?: boolean }) {
+  return (
+    <div className="ctx-cell">
+      <span className="ctx-cell-label">{label}</span>
+      <span className={`ctx-cell-value ${mono ? 'ctx-cell-mono' : ''} ${highlight ? 'ctx-cell-highlight' : ''}`}>{value}</span>
+    </div>
+  )
+}
+
+// ─── Think block ──────────────────────────────────────────────────────────────
+
+// (kept for backward compat if needed)
+function ThinkBlock({ content, reasonerName }: { content: string; reasonerName?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="think-block">
+      <button className="think-block-header" onClick={() => setOpen(o => !o)}>
+        <span className="think-block-icon">🧠</span>
+        <span className="think-block-label">{reasonerName ?? 'Reasoner'} thought</span>
+        <span className="think-block-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && <pre className="think-block-body">{content}</pre>}
+    </div>
+  )
+}
+void ThinkBlock
 
 // ─── Todo block ───────────────────────────────────────────────────────────────
 
@@ -472,7 +986,7 @@ function TodoBlock({ todos, live }: { todos: TodoItem[]; live: TodoItem[] }) {
   )
 }
 
-// ─── Compact tool step (opencode-style) ───────────────────────────────────────
+// ─── Tool step ────────────────────────────────────────────────────────────────
 
 function ToolStep({ tc }: { tc: ToolCall }) {
   const [expanded, setExpanded] = useState(false)
@@ -540,3 +1054,8 @@ function MarkdownText({ text, streaming }: { text: string; streaming?: boolean }
 
 function esc(s: string) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 function fmtSize(b: number) { return b < 1024 ? `${b}B` : b < 1048576 ? `${(b/1024).toFixed(0)}KB` : `${(b/1048576).toFixed(1)}MB` }
+function fmtNum(n: number) { return n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n/1_000).toFixed(1)}K` : String(n) }
+function fmtTokens(n: number) { return n >= 1_000 ? `${(n/1_000).toFixed(1)}K` : String(n) }
+function fmtTime(d: Date) {
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}

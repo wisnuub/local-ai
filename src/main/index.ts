@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
+import os from 'os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { existsSync, mkdirSync, createWriteStream, readdirSync, statSync, unlinkSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
@@ -8,7 +9,8 @@ import https from 'https'
 import http from 'http'
 import type { IncomingMessage, ClientRequest } from 'http'
 import { runConnectors } from './connectors'
-import { setApiConfig, setApiSystemPrompt, streamApiChat, isApiMode, clearApiMode, resetApiHistory } from './api-inference'
+import { setApiConfig, setDuoConfig, setApiSystemPrompt, streamApiChat, streamDuoChat, quickApiCall, isApiMode, isDuoMode, clearApiMode, resetApiHistory } from './api-inference'
+import { isOllamaRunning, listOllamaModels, pullOllamaModel, deleteOllamaModel } from './ollama'
 import {
   isBinReady, downloadBinary, scanLoras, scanImageModels,
   generate, cancelGeneration, IMG_MODEL_DIR, LORA_DIR, IMG_OUT_DIR,
@@ -70,6 +72,8 @@ function calcSpeed(samples: { bytes: number; time: number }[]): number {
   if (dt <= 0) return 0
   return (newest.bytes - oldest.bytes) / dt
 }
+
+ipcMain.handle('os:ram', () => Math.round(os.totalmem() / 1024 ** 3))
 
 ipcMain.handle('models:dir', () => MODELS_DIR)
 
@@ -240,19 +244,40 @@ ipcMain.handle('chat:clear-api', () => {
   return { ok: true }
 })
 
+ipcMain.handle('chat:set-duo', (_e, config: { reasoner: any; executor: any }) => {
+  setDuoConfig(config)
+  return { ok: true }
+})
+
+ipcMain.handle('chat:clear-duo', () => {
+  clearApiMode()
+  return { ok: true }
+})
+
 ipcMain.handle('chat:reset-history', () => {
   resetApiHistory()
   return { ok: true }
 })
 
 ipcMain.on('chat:send', async (event, { message }: { message: string }) => {
-  // Route to API or local inference
+  // Route to duo, API, or local inference
+  if (isDuoMode()) {
+    streamDuoChat(
+      message,
+      (token)  => event.reply('chat:think-token', token),
+      ()       => event.reply('chat:think-done'),
+      (token)  => event.reply('chat:token', token),
+      (usage)  => event.reply('chat:done', { usage }),
+      (err)    => event.reply('chat:error', err),
+    )
+    return
+  }
   if (isApiMode()) {
     streamApiChat(
       message,
-      (token) => event.reply('chat:token', token),
-      ()      => event.reply('chat:done'),
-      (err)   => event.reply('chat:error', err),
+      (token)  => event.reply('chat:token', token),
+      (usage)  => event.reply('chat:done', { usage }),
+      (err)    => event.reply('chat:error', err),
     )
     return
   }
@@ -261,9 +286,18 @@ ipcMain.on('chat:send', async (event, { message }: { message: string }) => {
     await currentSession.prompt(message, {
       onToken(tokens: number[]) { event.reply('chat:token', currentModel.detokenize(tokens)) }
     })
-    event.reply('chat:done')
+    event.reply('chat:done', {})
   } catch (e: any) {
     event.reply('chat:error', e.message)
+  }
+})
+
+ipcMain.handle('chat:quick', async (_e, prompt: string) => {
+  try {
+    const text = await quickApiCall(prompt)
+    return { ok: true, text }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
   }
 })
 
@@ -317,6 +351,27 @@ ipcMain.handle('connectors:search', async (_e, { connectors, query }: { connecto
 ipcMain.handle('dialog:open-folder', async () => {
   const res = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory'] })
   return res.filePaths[0] || null
+})
+
+// ─── Ollama ───────────────────────────────────────────────────────────────────
+
+ipcMain.handle('ollama:check', () => isOllamaRunning())
+ipcMain.handle('ollama:list',  () => listOllamaModels())
+ipcMain.handle('ollama:delete', (_e, name: string) => deleteOllamaModel(name))
+
+ipcMain.on('ollama:pull', (event, name: string) => {
+  pullOllamaModel(
+    name,
+    (status, percent) => event.reply('ollama:pull-progress', { name, status, percent }),
+    ()               => event.reply('ollama:pull-done',     { name }),
+    (err)            => event.reply('ollama:pull-error',    { name, error: err }),
+  )
+})
+
+ipcMain.handle('ollama:select', async (_e, modelName: string) => {
+  setApiConfig({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelId: modelName, apiKey: 'ollama' })
+  resetApiHistory()
+  return { ok: true }
 })
 
 // ─── Image generation ─────────────────────────────────────────────────────────

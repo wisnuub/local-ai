@@ -10,14 +10,20 @@ interface Window {
     onDownloadDone: (cb: (data: { filename: string }) => void) => () => void
     onDownloadError: (cb: (data: { filename: string; error: string }) => void) => () => void
     loadModel: (filename: string) => Promise<{ ok: boolean; error?: string }>
+    getSystemRam:    () => Promise<number>
     chatInit:        (systemPrompt: string) => Promise<{ ok: boolean; error?: string }>
     chatSetApi:      (cfg: { provider: string; baseUrl: string; modelId: string; apiKey: string }) => Promise<{ ok: boolean }>
     chatClearApi:    () => Promise<{ ok: boolean }>
     chatResetHistory:() => Promise<{ ok: boolean }>
+    chatSetDuo:      (cfg: { reasoner: any; executor: any }) => Promise<{ ok: boolean }>
+    chatClearDuo:    () => Promise<{ ok: boolean }>
+    chatQuick:       (prompt: string) => Promise<{ ok: boolean; text?: string; error?: string }>
     sendMessage: (message: string) => void
     onChatToken: (cb: (token: string) => void) => () => void
-    onChatDone: (cb: () => void) => () => void
+    onChatDone:       (cb: (d: { usage?: any }) => void) => () => void
     onChatError: (cb: (e: string) => void) => () => void
+    onChatThinkToken: (cb: (token: string) => void) => () => void
+    onChatThinkDone:  (cb: () => void) => () => void
     readFile: (path: string) => Promise<{ ok: boolean; content: string; error?: string }>
     writeFile: (path: string, content: string) => Promise<{ ok: boolean; error?: string }>
     runShell: (command: string, cwd: string) => Promise<{ ok: boolean; stdout: string; stderr: string; code: number; error?: string }>

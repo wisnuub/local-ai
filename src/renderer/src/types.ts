@@ -4,11 +4,13 @@ export interface ModelDef {
   description: string
   params: string
   sizeGb: number
+  ramGb: number            // minimum RAM needed to run this model
   categories: string[]
   repo: string
   filename: string
   url: string
   tags: string[]
+  capabilities?: string[]  // 'thinking' | 'coding' | 'tools' | 'vision'
 }
 
 export interface LocalModel {
@@ -46,11 +48,14 @@ export interface TodoItem {
 
 export interface ChatMessage {
   id: string
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'planner' | 'executor'
   content: string
   toolCalls?: ToolCall[]
   todos?: TodoItem[]
   streaming?: boolean
+  thinkContent?: string    // legacy: duo mode think content stored on assistant msg
+  usage?: { prompt: number; completion: number; reasoning?: number }
+  error?: string
 }
 
 export interface DiffFile {

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { MODELS, CATEGORIES } from '../data/models'
 import { ModelDef, LocalModel, DownloadEntry } from '../types'
 
@@ -17,7 +17,19 @@ export default function ModelBrowser({ localModels, downloads, onDownload, onUse
   const [hfSearch,   setHfSearch]   = useState('')
   const [hfResults,  setHfResults]  = useState<any[]>([])
   const [hfLoading,  setHfLoading]  = useState(false)
+  const [systemRam,  setSystemRam]  = useState<number | null>(null)
   const hfTimer = useRef<any>(null)
+
+  useEffect(() => {
+    window.api.getSystemRam().then(setSystemRam)
+  }, [])
+
+  const ramFit = (m: ModelDef) => {
+    if (systemRam === null) return 'unknown'
+    if (m.ramGb <= systemRam * 0.7) return 'green'
+    if (m.ramGb <= systemRam) return 'yellow'
+    return 'red'
+  }
 
   const isDownloaded  = (m: ModelDef) => localModels.some(l => l.filename === m.filename)
   const dlEntry       = (m: ModelDef) => downloads[m.filename]
@@ -110,6 +122,15 @@ export default function ModelBrowser({ localModels, downloads, onDownload, onUse
         {/* Curated grid */}
         {!hfSearch && (
           <>
+            {systemRam !== null && (
+              <div className="ram-banner">
+                <span className="ram-banner-icon">💾</span>
+                <span className="ram-banner-text">
+                  {systemRam} GB RAM detected —{' '}
+                  <strong>{systemRam >= 16 ? 'all models available' : systemRam >= 8 ? 'models up to ~3.5 GB recommended' : 'models up to 2 GB recommended'}</strong>
+                </span>
+              </div>
+            )}
             <p className="section-title">
               {category === 'all' ? 'All Models' : CATEGORIES.find(c => c.id === category)?.label}
               <span className="section-count">{filtered.length}</span>
@@ -122,17 +143,24 @@ export default function ModelBrowser({ localModels, downloads, onDownload, onUse
                 const paused     = isPaused(m)
                 const isActive   = activeModel?.id === m.id
                 const pct        = dl?.total ? (dl.received / dl.total) * 100 : 0
+                const fit        = ramFit(m)
 
                 return (
                   <div key={m.id} className={`model-card ${isActive ? 'model-card--active' : ''}`}>
                     <div className="card-header">
                       <span className="card-name">{m.name}</span>
-                      {isActive && <span className="badge-active">Active</span>}
+                      <div className="card-badges">
+                        {isActive && <span className="badge-active">Active</span>}
+                        {fit === 'green'  && <span className="badge-ram badge-ram--green">✓ Fits {systemRam}GB</span>}
+                        {fit === 'yellow' && <span className="badge-ram badge-ram--yellow">⚠ Tight fit</span>}
+                        {fit === 'red'    && <span className="badge-ram badge-ram--red">✗ Needs {m.ramGb}GB+</span>}
+                      </div>
                     </div>
 
                     <div className="card-meta">
                       <span className="meta-pill">{m.params}</span>
                       <span className="meta-pill">{m.sizeGb} GB</span>
+                      {m.capabilities?.includes('thinking') && <span className="meta-pill meta-pill--think">🧠 Thinking</span>}
                       {m.categories.map(c => (
                         <span key={c} className={`meta-pill meta-pill--cat cat-${c}`}>{c}</span>
                       ))}
