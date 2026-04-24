@@ -231,6 +231,12 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
   const [diffFiles,    setDiffFiles]    = useState<DiffFile[]>([])
   const [selectedFile, setSelectedFile] = useState<DiffFile | null>(null)
   const [todos,        setTodos]        = useState<TodoItem[]>([])
+  const [permMode,     setPermMode]     = useState<'ask' | 'auto'>(() =>
+    (localStorage.getItem('permMode') as any) ?? 'ask'
+  )
+  const [pendingTool,  setPendingTool]  = useState<{
+    tool: ToolName; args: Record<string, any>; resolve: (allowed: boolean) => void
+  } | null>(null)
   const [stats,        setStats]        = useState<SessionStats>({
     sessionStart:      new Date(),
     lastActivity:      new Date(),
@@ -256,6 +262,8 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
   const inputRef      = useRef<HTMLTextAreaElement>(null)
   const lastPromptRef = useRef<string>('')
   const tokenTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const permModeRef   = useRef(permMode)
+  useEffect(() => { permModeRef.current = permMode }, [permMode])
 
   useEffect(() => {
     const sysPrompt = chatMode === 'chat' ? makeChatSystemPrompt() : makeAgentSystemPrompt(workspace)
@@ -515,7 +523,7 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
     setMessages(prev => prev.map(m => m.id === aId ? { ...m, streaming: false } : m))
 
     setThinking(false); setGenerating(false)
-    inputRef.current?.focus()
+    setTimeout(() => inputRef.current?.focus(), 30)
   }, [fetchCtx, streamTurn, modelType])
 
   // ─── Agent loop ───────────────────────────────────────────────────────────
@@ -524,7 +532,24 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
     const connCtx = await fetchCtx(userText)
     const firstPrompt = connCtx ? `[Context]\n${connCtx}\n\n---\n${userText}` : userText
     lastPromptRef.current = firstPrompt
-    setGenerating(true); setThinking(true)
+    setGenerating(true)
+
+    // Pre-plan: quick non-streaming call to show what the agent will do
+    if (modelType !== 'local') {
+      const planMsgId = uid()
+      setMessages(prev => [...prev, { id: planMsgId, role: 'planner', content: '', streaming: true }])
+      const planR = await window.api.chatQuick(
+        `You are about to complete a task using file and shell tools. List 3–5 concrete steps you will take. Output ONLY the numbered list — no intro, no summary.\n\nTask: ${userText}`
+      )
+      const planText = planR?.ok ? planR.text?.trim() : ''
+      if (planText) {
+        setMessages(prev => prev.map(m => m.id === planMsgId ? { ...m, content: planText, streaming: false } : m))
+      } else {
+        setMessages(prev => prev.filter(m => m.id !== planMsgId))
+      }
+    }
+
+    setThinking(true)
 
     let nextPrompt = firstPrompt
     let currentTodos: TodoItem[] = []
@@ -573,6 +598,18 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
           m.id !== aId ? m : { ...m, toolCalls: m.toolCalls?.map(t => t.id === tc.id ? { ...t, status, result } : t) }
         ))
 
+      // Permission gate for destructive tools
+      if (DESTRUCTIVE.includes(tool) && permModeRef.current === 'ask') {
+        const allowed = await new Promise<boolean>(resolve => setPendingTool({ tool, args, resolve }))
+        setPendingTool(null)
+        if (!allowed) {
+          updateTool('done', 'Skipped — denied by user')
+          nextPrompt = `OBSERVATION:\nUser denied permission to run ${tool}. Ask the user what to do next.`
+          setThinking(true)
+          continue
+        }
+      }
+
       const result = await executeTool(tool, args)
       updateTool('done', result)
 
@@ -581,7 +618,7 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
     }
 
     setThinking(false); setGenerating(false)
-    inputRef.current?.focus()
+    setTimeout(() => inputRef.current?.focus(), 30)
   }, [fetchCtx, streamTurn, modelType, workspace, refreshDiff])
 
   // ─── Retry ────────────────────────────────────────────────────────────────
@@ -631,6 +668,7 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
   const submit = () => {
     const text = input.trim(); if (!text || generating) return
     setInput('')
+    setTimeout(() => inputRef.current?.focus(), 0)
     setMessages(prev => [...prev, { id: uid(), role: 'user', content: text }])
     setStats(s => ({ ...s, userMessages: s.userMessages + 1, lastActivity: new Date() }))
     const prompt = thinkMode && isThinkingModel ? `/think\n${text}` : text
@@ -659,6 +697,19 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
           disabled={isReasoner}
         >🤖 Agent</button>
         {isReasoner && <span className="reasoner-hint">Use as 🧠 Planner in Duo Mode for coding tasks</span>}
+        {chatMode === 'agent' && !isReasoner && (
+          <button
+            className={`perm-mode-btn ${permMode === 'auto' ? 'perm-mode-btn--auto' : ''}`}
+            onClick={() => {
+              const next = permMode === 'ask' ? 'auto' : 'ask'
+              setPermMode(next)
+              localStorage.setItem('permMode', next)
+            }}
+            title={permMode === 'ask' ? 'Ask before writing/editing files — click to auto-approve all' : 'Auto-approving all tool calls — click to require permission'}
+          >
+            {permMode === 'ask' ? '🔐 Ask' : '⚡ Do all'}
+          </button>
+        )}
       </div>
       <div className="chat-topbar-right">
         <button className="new-chat-btn" onClick={newChat} title="Clear conversation and start fresh">＋ New chat</button>
@@ -681,7 +732,11 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
           <textarea
             ref={inputRef}
             className="chat-input"
-            placeholder={generating ? 'Working…' : 'Ask anything…'}
+            placeholder={
+              generating ? 'Working…'
+              : chatMode === 'agent' ? 'What do you want me to build or fix?'
+              : 'Ask anything…'
+            }
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKey}
@@ -763,6 +818,36 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
     <div className="chat-root">
       {showContext && (
         <ContextPanel stats={stats} messages={messages} modelName={modelName} onClose={() => setShowContext(false)} />
+      )}
+
+      {/* Permission dialog */}
+      {pendingTool && (
+        <div className="perm-overlay">
+          <div className="perm-dialog">
+            <div className="perm-header">
+              <span className="perm-icon">{TOOL_ICONS[pendingTool.tool]}</span>
+              <span className="perm-title">Allow {TOOL_LABELS[pendingTool.tool]}?</span>
+            </div>
+            <p className="perm-detail">{toolDesc(pendingTool.tool, pendingTool.args)}</p>
+            <div className="perm-actions">
+              <button className="perm-deny-btn" onClick={() => { pendingTool.resolve(false); setPendingTool(null) }}>
+                Deny
+              </button>
+              <button className="perm-allow-btn" onClick={() => { pendingTool.resolve(true); setPendingTool(null) }}>
+                Allow once
+              </button>
+              <button className="perm-all-btn" onClick={() => {
+                const next = 'auto'
+                setPermMode(next)
+                localStorage.setItem('permMode', next)
+                pendingTool.resolve(true)
+                setPendingTool(null)
+              }}>
+                ⚡ Allow all
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showSplit ? (
