@@ -262,6 +262,23 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
     window.api.chatInit(sysPrompt)
   }, [workspace, chatMode])
 
+  // Reset session stats whenever the active model changes
+  useEffect(() => {
+    setStats({
+      sessionStart:      new Date(),
+      lastActivity:      new Date(),
+      userMessages:      0,
+      assistantMessages: 0,
+      totalTokens:       0,
+      inputTokens:       0,
+      outputTokens:      0,
+      reasoningTokens:   0,
+      cacheRead:         0,
+      totalCostUsd:      0,
+      contextLimit:      getContextLimit(modelName),
+    })
+  }, [modelName])
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, thinking])
 
   const handleLayout = (l: Layout) => {
@@ -582,6 +599,33 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
     else runAgentTurn(prompt)
   }, [generating, chatMode, runChatTurn, runAgentTurn])
 
+  // ─── New chat ─────────────────────────────────────────────────────────────
+
+  const newChat = useCallback(() => {
+    window.api.chatResetHistory()
+    const welcome = modelType === 'duo'
+      ? `Duo mode active. **${duoReasonerName}** will plan, then I'll execute with tools.\n\nTell me what to build or fix.`
+      : isReasoner
+        ? `Hi! I'm **${modelName}**.\n\nI'm a reasoning model — best at analysis, planning, and complex thinking. I'm in **Chat mode** (no tools).\n\nFor coding tasks with file access, use me as the **Planner in Duo Mode** paired with a fast Groq model.`
+        : `Hi! I'm **${modelName}**${modelType === 'api' ? ' via cloud' : ' running locally'}.\n\nTell me what to do — I'll explore your workspace, read files, make changes, and track progress with a todo list.`
+    setMessages([{ id: uid(), role: 'assistant', content: welcome }])
+    setTodos([])
+    setStats({
+      sessionStart:      new Date(),
+      lastActivity:      new Date(),
+      userMessages:      0,
+      assistantMessages: 0,
+      totalTokens:       0,
+      inputTokens:       0,
+      outputTokens:      0,
+      reasoningTokens:   0,
+      cacheRead:         0,
+      totalCostUsd:      0,
+      contextLimit:      getContextLimit(modelName),
+    })
+    lastPromptRef.current = ''
+  }, [modelName, modelType, isReasoner, duoReasonerName])
+
   // ─── Submit ───────────────────────────────────────────────────────────────
 
   const submit = () => {
@@ -617,10 +661,12 @@ export default function ChatView({ modelName, modelType, workspace, duoReasonerN
         {isReasoner && <span className="reasoner-hint">Use as 🧠 Planner in Duo Mode for coding tasks</span>}
       </div>
       <div className="chat-topbar-right">
+        <button className="new-chat-btn" onClick={newChat} title="Clear conversation and start fresh">＋ New chat</button>
         <button className={`ctx-btn ${showContext ? 'ctx-btn--active' : ''}`} onClick={() => setShowContext(v => !v)}>Context</button>
         {isDuo && (
-          <button className="layout-btn" onClick={() => handleLayout(layout === 'combined' ? 'split' : 'combined')}>
-            {layout === 'split' ? '⊞ Combined' : '⊟ Split'}
+          <button className="layout-btn" onClick={() => handleLayout(layout === 'combined' ? 'split' : 'combined')}
+            title={layout === 'combined' ? 'Split into planner / executor columns' : 'Merge into a single group thread'}>
+            {layout === 'split' ? '⊞ Group thread' : '⊟ Side by side'}
           </button>
         )}
       </div>

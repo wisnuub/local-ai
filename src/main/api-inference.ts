@@ -37,13 +37,13 @@ let systemPrompt = ''
 export function setApiConfig(config: ApiModelConfig) {
   apiConfig = config
   duoConfig = null
-  apiHistory = []
+  // history intentionally preserved so the new model has conversation context
 }
 
 export function setDuoConfig(config: DuoModelConfig) {
   duoConfig = config
   apiConfig = null
-  apiHistory = []
+  // history intentionally preserved so the new model has conversation context
 }
 
 export function setApiSystemPrompt(prompt: string) {
@@ -77,6 +77,7 @@ function streamWithConfig(
   onToken: (t: string) => void,
   onDone: (fullText: string, usage: UsageStats | null) => void,
   onError: (e: string) => void,
+  retriesLeft = 3,
 ) {
   const body = JSON.stringify({
     model: cfg.modelId,
@@ -106,6 +107,19 @@ function streamWithConfig(
   let usage: UsageStats | null = null
 
   const req = mod.request(options, (res) => {
+    if (res.statusCode === 429) {
+      let body = ''
+      res.on('data', (d: Buffer) => { body += d.toString() })
+      res.on('end', () => {
+        if (retriesLeft > 0) {
+          const delay = (4 - retriesLeft) * 2000 // 2 s, 4 s, 6 s
+          setTimeout(() => streamWithConfig(cfg, messages, onToken, onDone, onError, retriesLeft - 1), delay)
+        } else {
+          onError(`429: Rate limited — wait a moment and try again`)
+        }
+      })
+      return
+    }
     if (res.statusCode && res.statusCode >= 400) {
       let err = ''
       res.on('data', (d: Buffer) => { err += d.toString() })

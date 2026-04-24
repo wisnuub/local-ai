@@ -78,7 +78,6 @@ export default function App() {
 
   const selectApiModel = async (model: ApiModelDef, key: string) => {
     await window.api.chatSetApi({ provider: model.provider, baseUrl: model.baseUrl, modelId: model.modelId, apiKey: key })
-    await window.api.chatResetHistory()
     setActiveModel({ name: model.name, type: 'api', apiDef: model })
     setShowSelector(false)
     setView('chat')
@@ -89,7 +88,6 @@ export default function App() {
       reasoner: { baseUrl: reasoner.baseUrl, modelId: reasoner.modelId, apiKey: reasonerKey },
       executor: { baseUrl: executor.baseUrl, modelId: executor.modelId, apiKey: executorKey },
     })
-    await window.api.chatResetHistory()
     setActiveModel({
       name: `${reasoner.name} + ${executor.name}`,
       type: 'duo',
